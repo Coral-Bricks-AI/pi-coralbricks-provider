@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.32
 
 - Quiet startup sync. The session-start `/v1/models` revalidation runs in the background only with a key, only when the disk cache is older than 1 hour (`PI_PROVIDER_SYNC_TTL_MS`, `0` = always), missing or corrupt, or fetched with a different key, and only in one pi process at a time (a `coralbricks-models.lock` file next to the cache). `/login coralbricks` (Pi's forced refresh) and a key change still refresh at once. Failed refreshes back off for 5 minutes, and sessions that skip adopt a cache another process refreshed, so `/new`, `pi -p` and fan-out child agents no longer each call the API. Only the copy that owns the runtime takes the lock. The policy lives in `sync-policy.ts`, shared verbatim across pi-*-provider packages.
 - Never store the API key: key changes are detected through a salted sha256 fingerprint in `cache/coralbricks-models.sync.json`. The cache file format is unchanged, so older versions keep reading it; a cache written by an older version is revalidated once.
