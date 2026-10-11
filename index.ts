@@ -11,6 +11,10 @@
  *      (authoritative enabled set + per-million USD pricing)
  *      → merge with embedded → cache → hot-swap. Without a key nothing is
  *      fetched; the stale catalog serves until /login or a key appears.
+ *      Quiet startup sync (sync-policy.ts): only when the disk cache is older
+ *      than the TTL (1h, PI_PROVIDER_SYNC_TTL_MS), missing, or fetched with a
+ *      different key, or Pi forces it (after /login), and only one pi process
+ *      at a time (lock file next to the cache).
  *   3. patch.json + custom-models.json applied on top of whichever source won
  *
  * When several copies of this package load into one Pi runtime (a standalone
@@ -42,6 +46,7 @@ import { createSettingsCommand, loadConfig, SETTINGS_COMMAND } from "./settings"
 import { claimRuntime, type CoralCopy } from "./guard";
 import { park, planPark, withParkFallback, type ParkPlan } from "./park";
 import { coralApiKeyAuth, CORALBRICKS_ENV_VAR } from "./auth";
+import { acquireModelSync, cacheChangedSinceLoad, markCacheLoaded, writeFileAtomic } from "./sync-policy";
 import modelsData from "./models.json" with { type: "json" };
 import customModelsData from "./custom-models.json" with { type: "json" };
 import patchData from "./patch.json" with { type: "json" };
@@ -318,7 +323,8 @@ function loadCachedModels(): JsonModel[] | null {
 function cacheModels(models: JsonModel[]): void {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(CACHE_PATH, JSON.stringify(models, null, 2) + "\n");
+    // Atomic (tmp + rename): other pi processes may be reading the cache right now.
+    writeFileAtomic(CACHE_PATH, JSON.stringify(models, null, 2) + "\n");
   } catch {
     // Cache write failure is non-fatal
   }
@@ -392,6 +398,7 @@ function withDeprecated(models: JsonModel[]): JsonModel[] {
 }
 
 function loadStaleModels(embeddedModels: JsonModel[]): JsonModel[] {
+  markCacheLoaded(CACHE_PATH); // stat before read: lets a skipped sync spot newer caches
   const cached = loadCachedModels();
   if (!cached || cached.length === 0) return embeddedModels;
 
@@ -405,12 +412,26 @@ function loadStaleModels(embeddedModels: JsonModel[]): JsonModel[] {
   return cached;
 }
 
-async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[], signal?: AbortSignal): Promise<JsonModel[] | null> {
-  const liveModels = await fetchLiveModels(apiKey, signal);
-  if (!liveModels || liveModels.length === 0) return null;
-  const merged = mergeWithEmbedded(liveModels, embeddedModels);
-  cacheModels(merged);
-  return merged;
+/**
+ * Background revalidation, gated by the quiet startup sync policy
+ * (sync-policy.ts): no key → no fetch; fresh cache (TTL) → no fetch; another
+ * process already fetching → no fetch. When skipped, a cache that another
+ * process refreshed since we loaded it is adopted from disk instead.
+ * `force` bypasses the TTL (Pi sets it after /login); it is still single-flight.
+ */
+async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[], signal?: AbortSignal, force = false): Promise<JsonModel[] | null> {
+  const lease = acquireModelSync({ cachePath: CACHE_PATH, apiKey, force });
+  if (!lease) return cacheChangedSinceLoad(CACHE_PATH) ? loadStaleModels(embeddedModels) : null;
+  let merged: JsonModel[] | null = null;
+  try {
+    const liveModels = await fetchLiveModels(apiKey, signal);
+    if (!liveModels || liveModels.length === 0) return null;
+    merged = mergeWithEmbedded(liveModels, embeddedModels);
+    cacheModels(merged);
+    return merged;
+  } finally {
+    lease.release(merged ? "fetched" : signal?.aborted ? "aborted" : "failed");
+  }
 }
 
 /** pi-ai's clampOpenAIPromptCacheKey, inlined: Coral accepts the same field. */
@@ -551,6 +572,8 @@ export default function (pi: ExtensionAPI) {
   // so session-start revalidation stays the one routine fetch.
   let revalidatedKey: string | undefined | null = null;
   let keySync: Promise<void> = Promise.resolve();
+  // The in-flight session-start revalidation; it never rejects.
+  let sessionSync: Promise<void> = Promise.resolve();
   let modelRegistry: ModelRegistry | undefined;
 
   async function refreshModels(context: RefreshModelsContext): Promise<void> {
@@ -561,7 +584,11 @@ export default function (pi: ExtensionAPI) {
     revalidatedKey = apiKey;
     cachedApiKey = apiKey;
     revalidateAbort?.abort(); // a newer credential supersedes an in-flight session revalidation
-    const freshBase = await revalidateModels(apiKey, embeddedModels, context.signal);
+    await sessionSync; // ...and must release its sync lock first, or this refresh would skip as "locked"
+    if (context.signal.aborted) return;
+    // Through the quiet-sync lease: a forced refresh (after /login) or a new key
+    // skips the TTL; otherwise a fresh disk cache from another process serves.
+    const freshBase = claim.owns() ? await revalidateModels(apiKey, embeddedModels, context.signal, context.force) : null;
     if (!freshBase || context.signal.aborted) return;
     const next = buildModels(freshBase, customModels, patches);
     await context.publish({
@@ -613,8 +640,10 @@ export default function (pi: ExtensionAPI) {
     const signal = revalidateAbort.signal;
     const resolved = resolveApiKey(ctx.modelRegistry);
     keySync = resolved.then(() => { revalidatedKey = cachedApiKey; }, () => {});
-    void resolved
-      .then(() => revalidateModels(cachedApiKey, embeddedModels, signal))
+    // Fire-and-forget: startup never waits on the network. Only the owning copy
+    // reaches the sync lease (and so the lock file and /v1/models).
+    sessionSync = resolved
+      .then(() => (claim.owns() && !signal.aborted ? revalidateModels(cachedApiKey, embeddedModels, signal) : null))
       .then((freshBase) => {
         if (freshBase && !signal.aborted) {
           currentModels = buildModels(freshBase, customModels, patches);

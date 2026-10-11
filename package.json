@@ -41,6 +41,7 @@
     "auth.ts",
     "park.ts",
     "guard.ts",
+    "sync-policy.ts",
     "models.json",
     "deprecated-models.json",
     "custom-models.json",

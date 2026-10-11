@@ -28,6 +28,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
 - **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
 - **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models`, hot-swapped at session start and after `/login`. Without a key it makes no network request and serves the cached or embedded catalog
+- **Quiet startup sync** — startup never waits on the network, and the catalog is refreshed at most hourly, by one pi process at a time, so `/new`, `pi -p` and fan-out child agents share one cache (see [Model Sync](#model-sync))
 - **Safe to install twice** — when a standalone install and a copy bundled in another Pi package (such as [pi-fabric](https://github.com/fabric-runtime/pi-fabric)) load together, only the newest copy registers the provider (see [Installed more than once](#installed-more-than-once))
 - **synbad-validated** — [synbad](https://github.com/synthetic-lab/synbad) tool-calling and reasoning-parsing evals pass 13/13 in every run on GLM 5.3 in both unary and streaming modes
 
@@ -193,6 +194,13 @@ With [localterm](https://www.npmjs.com/package/localterm), store it once and it'
 localterm secret set coralbricks_api_key
 ```
 
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CORALBRICKS_API_KEY` | No | Your Coral API key (fallback if not in `auth.json` or `--api-key`) |
+| `PI_PROVIDER_SYNC_TTL_MS` | No | Model sync freshness window in ms (default `3600000`; `0` = revalidate every session start) |
+
 > Coral Inference is currently in a design-partner program — mint keys at [coralbricks.ai/api-keys](https://www.coralbricks.ai/api-keys). Newly-minted keys may take ~30 seconds to be honored, and `403 access_denied` means the account isn't on the allowlist yet.
 
 ## Thinking Levels
@@ -252,6 +260,14 @@ CORALBRICKS_API_KEY=cb_... node ../synbad/dist/source/index.js eval \
 ## Model Sync
 
 At startup the extension serves the last catalog it cached (`~/.pi/agent/cache/coralbricks-models.json`), or the catalog embedded in the package. Once Pi resolves a key (`/login coralbricks`, `auth.json`, `--api-key` or `CORALBRICKS_API_KEY`), it refreshes from the authenticated `/v1/models` at session start and after `/login`, caches the result and swaps it in. With no key it makes no network request at all.
+
+Startup never waits on the network: the session-start refresh runs in the background, and only when:
+
+- a Coral API key is configured (no key, no request),
+- the cache is older than 1 hour, missing or unreadable, was fetched with a different API key, or was written by a version before this sync policy, and
+- no other pi process is already refreshing it (a `coralbricks-models.lock` file next to the cache).
+
+So `/new`, `/reload`, `pi -p` and fan-out child agents share one cache instead of each calling the API; a session that skips the fetch still picks up a cache another process refreshed, and every cache write is atomic. `/login coralbricks` and a changed key always refresh, whatever the cache's age. A failed refresh is retried after 5 minutes at the earliest. `PI_PROVIDER_SYNC_TTL_MS` changes the window (`0` revalidates on every session start). Only a hash fingerprint of the key is stored (`coralbricks-models.sync.json`), never the key itself. When several copies of the extension load (see [Installed more than once](#installed-more-than-once)), only the owning copy touches the lock or the network.
 
 ## Updating Models
 

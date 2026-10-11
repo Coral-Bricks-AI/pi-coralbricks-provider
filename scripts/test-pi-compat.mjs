@@ -9,7 +9,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const home = await mkdtemp(join(tmpdir(), 'pi-provider-compat-'));
 const previousHome = process.env.PI_CODING_AGENT_DIR;
 const previousFetch = globalThis.fetch;
+const previousSyncTtl = process.env.PI_PROVIDER_SYNC_TTL_MS;
 process.env.PI_CODING_AGENT_DIR = home;
+delete process.env.PI_PROVIDER_SYNC_TTL_MS; // the default 1h sync TTL, whatever the caller's shell sets
 // Never allow a background catalog/account request to reach a real endpoint.
 let backgroundRequests = 0;
 const offlineFetch = async () => { backgroundRequests++; return new Response('', { status: 503 }); };
@@ -193,9 +195,38 @@ try {
       globalThis.fetch = offlineFetch;
     }
   }
-  console.log(JSON.stringify({ repo: manifest.name, pi: VERSION, hostEntry, extensions: loaded.extensions.length, tools: tools.size, models: modelCount, streamChecks, loginChecks, dualChecks, lifecycle: 'passed' }));
+  // Quiet startup sync: the next session start (a new pi process, /new, `pi -p`)
+  // within the TTL serves the cache the last sync wrote and requests nothing.
+  let quietChecks = 0;
+  for (const packages of [[root], [root, newer]]) {
+    const quietSettings = SettingsManager.inMemory({ packages, compaction: { enabled: false }, retry: { enabled: false } });
+    const quietLoader = new DefaultResourceLoader({ cwd: home, agentDir: home, settingsManager: quietSettings,
+      noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+    await quietLoader.reload();
+    assert.deepEqual(quietLoader.getExtensions().errors, []);
+    const requests = [];
+    globalThis.fetch = async (url) => { requests.push(String(url)); return new Response('', { status: 503 }); };
+    const quietRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: null, modelsStorePath: join(home, 'models-cache-quiet'), allowModelNetwork: false });
+    const { session: quietSession } = await createAgentSession({ cwd: home, agentDir: home, resourceLoader: quietLoader, modelRuntime: quietRuntime,
+      settingsManager: quietSettings, sessionManager: SessionManager.inMemory(home) });
+    try {
+      const quietErrors = [];
+      await quietSession.bindExtensions({ mode: 'print', onError: error => quietErrors.push(error) });
+      await new Promise(done => setTimeout(done, 100)); // let any background sync land
+      assert.deepEqual(requests, [], `${packages.length} cop${packages.length > 1 ? 'ies' : 'y'}: no /v1/models request within the sync TTL`);
+      assert(quietRuntime.getAllModels('coralbricks').some(model => model.id === 'probe-dual-model'), 'the cached catalog serves');
+      await quietSession.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
+      assert.deepEqual(quietErrors, []);
+      quietChecks++;
+    } finally {
+      quietSession.dispose();
+      globalThis.fetch = offlineFetch;
+    }
+  }
+  console.log(JSON.stringify({ repo: manifest.name, pi: VERSION, hostEntry, extensions: loaded.extensions.length, tools: tools.size, models: modelCount, streamChecks, loginChecks, dualChecks, quietChecks, lifecycle: 'passed' }));
 } finally {
   session?.dispose(); globalThis.fetch = previousFetch;
   if (previousHome === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousHome;
+  if (previousSyncTtl !== undefined) process.env.PI_PROVIDER_SYNC_TTL_MS = previousSyncTtl;
   await rm(home, { recursive: true, force: true });
 }
