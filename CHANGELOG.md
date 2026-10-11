@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Make no network request without a key ([Coral-Bricks-AI/coralbricks-api#139](https://github.com/Coral-Bricks-AI/coralbricks-api/issues/139)). Session start no longer fetches the public catalog when no key is configured: the cached or embedded catalog serves until `/login coralbricks` or a key resolves, then the authenticated `/v1/models` syncs as before. `scripts/update-models.js` keeps its public-catalog fallback for maintainers.
+
 ## 1.0.31
 
 - Add `/login coralbricks` ([Coral-Bricks-AI/coralbricks-api#139](https://github.com/Coral-Bricks-AI/coralbricks-api/issues/139)). The provider now registers as a native pi-ai provider with API-key auth, the pattern Pi's OpenRouter and Vercel AI Gateway providers use. Login points to https://www.coralbricks.ai for a key, prompts for it and stores it as the `coralbricks` api_key in `auth.json`, the entry the extension already read. `/logout` removes it. The model list then refreshes from the authenticated `/v1/models`, as it does at session start. The provider id, model ids, catalog sync, thinking levels, pricing, Responses parking and the `auth.json` / `--api-key` / `CORALBRICKS_API_KEY` resolution are unchanged.

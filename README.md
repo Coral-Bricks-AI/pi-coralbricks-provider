@@ -27,7 +27,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
 - **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
-- **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models` (or the unauthenticated [public catalog](https://www.coralbricks.ai/api/public/models) before auth), hot-swapped at session start and after `/login`
+- **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models`, hot-swapped at session start and after `/login`. Without a key it makes no network request and serves the cached or embedded catalog
 - **synbad-validated** — [synbad](https://github.com/synthetic-lab/synbad) tool-calling and reasoning-parsing evals pass 13/13 in every run on GLM 5.3 in both unary and streaming modes
 
 ## Installation
@@ -241,6 +241,10 @@ CORALBRICKS_API_KEY=cb_... node ../synbad/dist/source/index.js eval \
   --base-url https://inference.coralbricks.ai/v1 \
   --model glm-5.3-fp4 --count 1 --reasoning-effort high
 ```
+
+## Model Sync
+
+At startup the extension serves the last catalog it cached (`~/.pi/agent/cache/coralbricks-models.json`), or the catalog embedded in the package. Once Pi resolves a key (`/login coralbricks`, `auth.json`, `--api-key` or `CORALBRICKS_API_KEY`), it refreshes from the authenticated `/v1/models` at session start and after `/login`, caches the result and swaps it in. With no key it makes no network request at all.
 
 ## Updating Models
 

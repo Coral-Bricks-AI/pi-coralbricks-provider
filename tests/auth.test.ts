@@ -183,6 +183,37 @@ describe("catalog refresh after /login", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
+  it("makes no request without a key, then syncs /v1/models once /login stores one", async () => {
+    const fetch = vi.fn(async () => v1Models(["glm-5.3-fp4", "after-login"]));
+    vi.stubGlobal("fetch", fetch);
+    const { provider, handlers } = await setup();
+    const before = provider().getModels().map((m: any) => m.id);
+    let key: string | undefined;
+    await handlers.session_start({}, { modelRegistry: { getApiKeyForProvider: vi.fn(async () => key) } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Pi's startup, /model and forced refreshes with no key stay offline too.
+    await provider().refreshModels(refreshContext());
+    await provider().refreshModels(refreshContext({ force: true }));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(provider().getModels().map((m: any) => m.id)).toEqual(before);
+
+    key = "cb_new";
+    await provider().refreshModels(refreshContext({ credential: { type: "api_key", key } }));
+    expect(fetch.mock.calls.map((call: any[]) => String(call[0]))).toEqual(["https://inference.coralbricks.ai/v1/models"]);
+    expect((fetch.mock.calls[0] as any[])[1].headers.Authorization).toBe("Bearer cb_new");
+    expect(provider().getModels().map((m: any) => m.id)).toContain("after-login");
+  });
+
+  it("syncs only the authenticated /v1/models, never the public catalog", async () => {
+    const fetch = vi.fn(async () => new Response("", { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    const { handlers } = await setup();
+    await handlers.session_start({}, { modelRegistry: { getApiKeyForProvider: vi.fn(async () => "cb_session") } });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetch.mock.calls.map((call: any[]) => String(call[0]))).toEqual(["https://inference.coralbricks.ai/v1/models"]);
+  });
+
   it("keeps the current catalog when the refresh fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
     const { provider } = await setup();

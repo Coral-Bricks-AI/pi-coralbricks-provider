@@ -7,10 +7,10 @@
  *
  * Model resolution strategy: Stale-While-Revalidate
  *   1. Serve stale immediately: disk cache → embedded models.json (zero-latency)
- *   2. Revalidate in background: authenticated /v1/models (authoritative enabled
- *      set + per-million USD pricing) with the unauthenticated public catalog
- *      (https://www.coralbricks.ai/api/public/models) as fallback
- *      → merge with embedded → cache → hot-swap
+ *   2. Revalidate in background once a key resolves: authenticated /v1/models
+ *      (authoritative enabled set + per-million USD pricing)
+ *      → merge with embedded → cache → hot-swap. Without a key nothing is
+ *      fetched; the stale catalog serves until /login or a key appears.
  *   3. patch.json + custom-models.json applied on top of whichever source won
  *
  * Merge order: [live|cache|embedded] → apply patch.json → merge custom-models.json
@@ -187,7 +187,6 @@ const PROVIDER_ID = "coralbricks";
 const PROVIDER_NAME = "CoralBricks";
 const BASE_URL = "https://inference.coralbricks.ai/v1";
 const MODELS_URL = `${BASE_URL}/models`;
-const PUBLIC_CATALOG_URL = "https://www.coralbricks.ai/api/public/models";
 const CACHE_DIR = path.join(getAgentDir(), "cache");
 const CACHE_PATH = path.join(CACHE_DIR, `${PROVIDER_ID}-models.json`);
 const LIVE_FETCH_TIMEOUT_MS = 8000;
@@ -274,35 +273,6 @@ function transformApiModel(apiModel: any): JsonModel | null {
   return model;
 }
 
-/**
- * Transform a row from the public model catalog
- * (https://www.coralbricks.ai/api/public/models) — the no-auth mirror of the
- * gateway control plane. Fields: slug, name, contextWindow ("1M"),
- * inputPerM / outputPerM, and since 2026-10-08 cacheWritePerM (the cache write on
- * top of input). Coral's own prices are authoritative here; the parity/field vendor
- * comparison fields are ignored. A row without cacheWritePerM leaves cacheWrite 0 so
- * mergeWithEmbedded keeps the embedded rate.
- */
-function transformCatalogModel(entry: any): JsonModel | null {
-  if (!entry?.slug) return null;
-  const model: JsonModel = {
-    id: entry.slug,
-    name: typeof entry.name === "string" && entry.name ? entry.name : displayName(entry.slug),
-    reasoning: false,
-    input: ["text"],
-    cost: {
-      input: toNumber(entry.inputPerM),
-      output: toNumber(entry.outputPerM),
-      cacheRead: 0,
-      cacheWrite: writtenTokenCost(toNumber(entry.inputPerM), entry.cacheWritePerM),
-    },
-    contextWindow: parseContextWindow(entry.contextWindow),
-    maxTokens: DEFAULT_MAX_TOKENS[entry.slug] ?? FALLBACK_MAX_TOKENS,
-  };
-  model.compat = baseCompat();
-  return model;
-}
-
 async function fetchV1Models(apiKey: string, signal?: AbortSignal): Promise<JsonModel[] | null> {
   try {
     const response = await fetch(MODELS_URL, {
@@ -319,32 +289,14 @@ async function fetchV1Models(apiKey: string, signal?: AbortSignal): Promise<Json
   }
 }
 
-async function fetchPublicCatalog(signal?: AbortSignal): Promise<JsonModel[] | null> {
-  try {
-    const response = await fetch(PUBLIC_CATALOG_URL, {
-      signal: signal ? AbortSignal.any([AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    const entries = Array.isArray(data) ? data : (data.models || []);
-    if (!Array.isArray(entries) || entries.length === 0) return null;
-    return entries.map(transformCatalogModel).filter((m): m is JsonModel => m !== null);
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Live model fetch. The authenticated /v1/models is authoritative (it is the
- * exact per-key enabled set); the public catalog is the unauthenticated
- * fallback so model discovery works before a key is configured.
+ * Live model fetch from the authenticated /v1/models, the exact per-key enabled
+ * set. Without a key there is no request: the disk cache, then the embedded
+ * models.json, serve until a key resolves (/login, auth.json, the environment).
  */
 async function fetchLiveModels(apiKey: string | undefined, signal?: AbortSignal): Promise<JsonModel[] | null> {
-  if (apiKey) {
-    const fromApi = await fetchV1Models(apiKey, signal);
-    if (fromApi && fromApi.length > 0) return fromApi;
-  }
-  return fetchPublicCatalog(signal);
+  if (!apiKey) return null;
+  return fetchV1Models(apiKey, signal);
 }
 
 function loadCachedModels(): JsonModel[] | null {
@@ -376,8 +328,8 @@ function mergeWithEmbedded(liveModels: JsonModel[], embeddedModels: JsonModel[])
       // Self-heal: live API pricing is authoritative field-by-field. Prefer the
       // live cost when the API reports it (non-zero); fall back to embedded when
       // the API is silent (0). Coral reports cached_input_per_m as 0 because
-      // cached reads are free, which matches the curated cacheRead: 0. The
-      // public catalog has no cache-write rate, so its 0 keeps the embedded one.
+      // cached reads are free, which matches the curated cacheRead: 0. A row
+      // without a cache-write rate reports 0, which keeps the embedded one.
       // Curation (reasoning/input/compat/name/thinkingLevelMap/maxTokens) still wins via ...embedded.
       result.push({
         ...liveModel,
@@ -649,4 +601,4 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-export { applyPatch, buildModels, mergeWithEmbedded, transformApiModel, transformCatalogModel, activeDeprecatedModels, withDeprecated, parseContextWindow, PROVIDER_ID, BASE_URL };
+export { applyPatch, buildModels, mergeWithEmbedded, transformApiModel, activeDeprecatedModels, withDeprecated, parseContextWindow, PROVIDER_ID, BASE_URL };

@@ -11,7 +11,8 @@ const previousHome = process.env.PI_CODING_AGENT_DIR;
 const previousFetch = globalThis.fetch;
 process.env.PI_CODING_AGENT_DIR = home;
 // Never allow a background catalog/account request to reach a real endpoint.
-const offlineFetch = async () => new Response('', { status: 503 });
+let backgroundRequests = 0;
+const offlineFetch = async () => { backgroundRequests++; return new Response('', { status: 503 }); };
 globalThis.fetch = offlineFetch;
 let session;
 try {
@@ -112,6 +113,9 @@ try {
     assert.equal(aborted.stopReason, 'aborted', aborted.errorMessage); streamChecks++;
     modelCount += models.length;
   }
+  // No key anywhere: session start serves the cached/embedded catalog and requests nothing.
+  await new Promise(done => setTimeout(done, 50));
+  assert.equal(backgroundRequests, 0, 'no catalog request without a key');
   // /login <provider>: the host's own API-key flow stores the key in auth.json,
   // the post-login catalog refresh fetches /v1/models with it, and /logout removes it.
   let loginChecks = 0;

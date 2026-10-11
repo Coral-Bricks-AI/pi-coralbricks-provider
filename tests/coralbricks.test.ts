@@ -6,7 +6,6 @@ import {
   mergeWithEmbedded,
   parseContextWindow,
   transformApiModel,
-  transformCatalogModel,
   withDeprecated,
 } from "../index";
 import modelsData from "../models.json" with { type: "json" };
@@ -29,20 +28,6 @@ const v1DeepSeekRow = {
   supports_chat: true,
   supports_image_input: true,
   supports_tools: true,
-};
-
-// A public-catalog row shaped exactly as /api/public/models returns it.
-const catalogGlmRow = {
-  slug: "glm-5.3-fp4",
-  name: "GLM 5.3",
-  contextWindow: "1M",
-  precision: "FP4",
-  inputPerM: 1.12,
-  outputPerM: 4.4,
-  kvBytesPerToken: 47616,
-  docsUrl: "https://huggingface.co/zai-org/GLM-5.3",
-  parityVendor: { source: "Z.ai", inputPerM: 1.4, cachedPerM: 0.26, cacheWritePerM: 0, outputPerM: 4.4 },
-  fieldVendor: { source: "Z.ai", inputPerM: 1.4, cachedPerM: 0.26, cacheWritePerM: 0, outputPerM: 4.4 },
 };
 
 describe("transformApiModel (/v1/models rows)", () => {
@@ -84,27 +69,6 @@ describe("transformApiModel (/v1/models rows)", () => {
   it("returns null for rows without an id", () => {
     expect(transformApiModel(null)).toBeNull();
     expect(transformApiModel({})).toBeNull();
-  });
-});
-
-describe("transformCatalogModel (public catalog rows)", () => {
-  it("parses '1M' context strings and Coral's own prices", () => {
-    const m = transformCatalogModel(catalogGlmRow)!;
-    expect(m.id).toBe("glm-5.3-fp4");
-    expect(m.contextWindow).toBe(1048576);
-    expect(m.cost.input).toBe(1.12);
-    expect(m.cost.output).toBe(4.4);
-    expect(m.cost.cacheRead).toBe(0);
-  });
-
-  it("ignores parity/field vendor pricing", () => {
-    const m = transformCatalogModel(catalogGlmRow)!;
-    expect(m.cost.input).not.toBe(1.4);
-  });
-
-  it("returns null for rows without a slug", () => {
-    expect(transformCatalogModel(null)).toBeNull();
-    expect(transformCatalogModel({})).toBeNull();
   });
 });
 
@@ -191,11 +155,12 @@ describe("mergeWithEmbedded (live vs curated)", () => {
     expect(glm.input).toEqual(["text"]);
   });
 
-  it("keeps the curated cache-write rate when the public catalog (no such field) is the live source", () => {
-    const live = transformCatalogModel({ ...catalogGlmRow, slug: "glm-5.3-fast" })!;
+  it("keeps the curated cache-write rate when a live row omits cache_write_per_m", () => {
+    const { cache_write_per_m: _omitted, ...pricing } = v1DeepSeekRow.pricing;
+    const live = transformApiModel({ ...v1DeepSeekRow, id: "glm-5.3-fast", pricing: { ...pricing, input_per_m: 1.12, output_per_m: 4.4 } })!;
     expect(live.cost.cacheWrite).toBe(0);
-    // The catalog never reports cache_write_per_m, and the -fast slug's embedded
-    // row no longer carries it either, so patch.json is the durable source.
+    // The -fast slug's embedded row no longer carries the rate either, so
+    // patch.json is the durable source.
     const merged = buildModels(mergeWithEmbedded([live], modelsData as any), [], patchData as any);
     expect(merged.find((m) => m.id === "glm-5.3-fast")!.cost.cacheWrite).toBe(1.68);
   });
