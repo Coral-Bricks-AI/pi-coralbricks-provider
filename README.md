@@ -28,6 +28,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
 - **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
 - **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models`, hot-swapped at session start and after `/login`. Without a key it makes no network request and serves the cached or embedded catalog
+- **Safe to install twice** — when a standalone install and a copy bundled in another Pi package (such as [pi-fabric](https://github.com/fabric-runtime/pi-fabric)) load together, only the newest copy registers the provider (see [Installed more than once](#installed-more-than-once))
 - **synbad-validated** — [synbad](https://github.com/synthetic-lab/synbad) tool-calling and reasoning-parsing evals pass 13/13 in every run on GLM 5.3 in both unary and streaming modes
 
 ## Installation
@@ -80,6 +81,12 @@ pi
    ```bash
    pi -e /path/to/pi-coralbricks-provider
    ```
+
+### Installed more than once
+
+Another Pi package can bundle this extension; [pi-fabric](https://github.com/fabric-runtime/pi-fabric) does. You can still install it yourself, for example to get a newer version first. When two or more copies load into one Pi session, the newest version registers `coralbricks`, syncs models and serves `/coralbricks-settings`. The other copies register nothing and make no requests, so `/model` lists each model once and `/v1/models` is fetched once. Copies of the same version keep the one that loaded first.
+
+The copies find each other through a process-global registry (`Symbol.for("pi-coralbricks-provider.registry.v1")`), scoped to the Pi extension runtime through the event bus Pi shares among that runtime's extensions. The newest copy wins whichever order Pi loads them in. If it loads second, it takes over before the session starts, and Pi serves its registration because a provider registered later under the same id replaces the earlier one. Ownership never moves back, and it ends with the session, so `/reload`, `/new`, `/resume` and `/fork` start from a clean slate. Versions before 1.0.32 do not take part and always register.
 
 ## Available Models
 

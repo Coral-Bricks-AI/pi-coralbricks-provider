@@ -50,12 +50,16 @@ export function saveApi(api: CoralApi): void {
 
 const PARK_DESCRIPTION = "Responses only. Stores each response on Coral (store:true) and sends only new items with previous_response_id. Falls back to a full replay when the chain does not match.";
 
-export function registerSettingsCommand(
-  pi: ExtensionAPI,
+type SettingsCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
+
+export const SETTINGS_COMMAND = "coralbricks-settings";
+
+/** `/coralbricks-settings` for one loaded copy; index.ts registers it once per runtime. */
+export function createSettingsCommand(
   getConfig: () => CoralConfig,
   apply: (config: CoralConfig) => void,
-): void {
-  pi.registerCommand("coralbricks-settings", {
+): SettingsCommand {
+  return {
     description: "Configure CoralBricks API (Chat Completions or opt-in Responses) and Responses parking",
     async handler(_args, ctx) {
       if (!ctx.hasUI) {
@@ -127,5 +131,13 @@ export function registerSettingsCommand(
         };
       });
     },
-  });
+  };
+}
+
+export function registerSettingsCommand(
+  pi: ExtensionAPI,
+  getConfig: () => CoralConfig,
+  apply: (config: CoralConfig) => void,
+): void {
+  pi.registerCommand(SETTINGS_COMMAND, createSettingsCommand(getConfig, apply));
 }

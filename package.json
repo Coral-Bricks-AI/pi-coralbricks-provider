@@ -40,6 +40,7 @@
     "settings.ts",
     "auth.ts",
     "park.ts",
+    "guard.ts",
     "models.json",
     "deprecated-models.json",
     "custom-models.json",

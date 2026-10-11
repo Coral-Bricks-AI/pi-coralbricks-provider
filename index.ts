@@ -13,6 +13,10 @@
  *      fetched; the stale catalog serves until /login or a key appears.
  *   3. patch.json + custom-models.json applied on top of whichever source won
  *
+ * When several copies of this package load into one Pi runtime (a standalone
+ * install plus a copy bundled in another package), only the newest registers
+ * the provider and syncs models (guard.ts).
+ *
  * Merge order: [live|cache|embedded] → apply patch.json → merge custom-models.json
  *
  * Usage:
@@ -34,13 +38,15 @@ import { getAgentDir, type ExtensionAPI, type ModelRegistry } from "@earendil-wo
 import { lazyStream, type Api, type Credential, type Model, type RefreshModelsContext } from "@earendil-works/pi-ai";
 import type { AssistantMessageEventStream, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { clampThinkingLevel, streamOpenAICompletions, streamOpenAIResponses } from "@earendil-works/pi-ai/compat";
-import { loadConfig, registerSettingsCommand } from "./settings";
+import { createSettingsCommand, loadConfig, SETTINGS_COMMAND } from "./settings";
+import { claimRuntime, type CoralCopy } from "./guard";
 import { park, planPark, withParkFallback, type ParkPlan } from "./park";
 import { coralApiKeyAuth, CORALBRICKS_ENV_VAR } from "./auth";
 import modelsData from "./models.json" with { type: "json" };
 import customModelsData from "./custom-models.json" with { type: "json" };
 import patchData from "./patch.json" with { type: "json" };
 import deprecatedData from "./deprecated-models.json" with { type: "json" };
+import packageData from "./package.json" with { type: "json" };
 import fs from "fs";
 import path from "path";
 
@@ -187,6 +193,7 @@ const PROVIDER_ID = "coralbricks";
 const PROVIDER_NAME = "CoralBricks";
 const BASE_URL = "https://inference.coralbricks.ai/v1";
 const MODELS_URL = `${BASE_URL}/models`;
+const PACKAGE_VERSION: string = packageData.version;
 const CACHE_DIR = path.join(getAgentDir(), "cache");
 const CACHE_PATH = path.join(CACHE_DIR, `${PROVIDER_ID}-models.json`);
 const LIVE_FETCH_TIMEOUT_MS = 8000;
@@ -491,7 +498,6 @@ export function streamCoral(
 // API Key Resolution (via ModelRegistry)
 
 let cachedApiKey: string | undefined;
-let revalidateAbort: AbortController | null = null;
 
 async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
   cachedApiKey = (await modelRegistry.getApiKeyForProvider(PROVIDER_ID)) ?? undefined;
@@ -521,6 +527,19 @@ export default function (pi: ExtensionAPI) {
   const customModels = customModelsData as JsonModel[];
   const patches = patchData as PatchData;
 
+  let revalidateAbort: AbortController | null = null;
+  let settingsCommand: ReturnType<typeof createSettingsCommand> | undefined;
+  const copy: CoralCopy = {
+    version: PACKAGE_VERSION,
+    // A newer copy took this runtime over while extensions loaded; Pi serves its
+    // registration instead of ours, and our hooks below go inert.
+    resign: () => revalidateAbort?.abort(),
+    settings: async (args, ctx) => settingsCommand?.handler(args, ctx as any),
+  };
+  const claim = claimRuntime(pi, copy);
+  // A newer copy, or an equal one that loaded first, already serves this runtime.
+  if (!claim.owns()) return;
+
   let config = loadConfig();
   let currentModels = buildModels(loadStaleModels(embeddedModels), customModels, patches);
   const selectedApi = () => config.api === "responses" ? "openai-responses" : "openai-completions";
@@ -535,7 +554,7 @@ export default function (pi: ExtensionAPI) {
   let modelRegistry: ModelRegistry | undefined;
 
   async function refreshModels(context: RefreshModelsContext): Promise<void> {
-    if (!context.allowNetwork) return;
+    if (!context.allowNetwork || !claim.owns()) return;
     await keySync;
     const apiKey = await refreshApiKey(modelRegistry, context.credential);
     if (context.signal.aborted || (!context.force && apiKey === revalidatedKey)) return;
@@ -554,6 +573,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function registerProvider() {
+    if (!claim.owns()) return;
     providerModels = toProviderModels(currentModels, selectedApi());
     // An already-selected model may still carry the previous API. Snapshot
     // the current selection per request, without mutating that model/history.
@@ -573,12 +593,20 @@ export default function (pi: ExtensionAPI) {
     });
   }
   registerProvider();
-  registerSettingsCommand(pi, () => config, (next) => {
+  settingsCommand = createSettingsCommand(() => config, (next) => {
     config = next;
     registerProvider();
   });
+  // One command per runtime, served by whichever copy owns it when invoked.
+  if (claim.first) {
+    pi.registerCommand(SETTINGS_COMMAND, {
+      description: settingsCommand.description,
+      handler: (args, ctx) => (claim.owner() ?? copy).settings(args, ctx),
+    });
+  }
 
   pi.on("session_start", async (_event, ctx) => {
+    if (!claim.owns()) return;
     modelRegistry = ctx.modelRegistry;
     revalidateAbort?.abort();
     revalidateAbort = new AbortController();
@@ -598,6 +626,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     revalidateAbort?.abort();
+    claim.release();
   });
 }
 

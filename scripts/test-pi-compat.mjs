@@ -1,6 +1,6 @@
 // Offline Pi 1.1.0 manifest, lifecycle, catalog, /login and real transport regression.
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -150,7 +150,50 @@ try {
   assert(loginChecks > 0, 'a registered provider offers /login');
   await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ repo: manifest.name, pi: VERSION, hostEntry, extensions: loaded.extensions.length, tools: tools.size, models: modelCount, streamChecks, loginChecks, lifecycle: 'passed' }));
+  // Two copies in one runtime (a standalone install plus one bundled in another
+  // package, e.g. pi-fabric): only the newer registers, syncs and adds the command.
+  const newer = join(home, 'newer-copy');
+  await mkdir(newer);
+  for (const file of manifest.files) if (!file.includes('/')) await copyFile(join(root, file), join(newer, file));
+  await writeFile(join(newer, 'package.json'), JSON.stringify({ ...manifest, version: '999.0.0' }));
+  await writeFile(authFile, JSON.stringify({ coralbricks: { type: 'api_key', key: 'probe-dual-key' } }));
+  let dualChecks = 0;
+  for (const packages of [[root, newer], [newer, root]]) {
+    await rm(join(home, 'cache'), { recursive: true, force: true }); // no catalog left by the previous order
+    const dualSettings = SettingsManager.inMemory({ packages, compaction: { enabled: false }, retry: { enabled: false } });
+    const dualLoader = new DefaultResourceLoader({ cwd: home, agentDir: home, settingsManager: dualSettings,
+      noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+    await dualLoader.reload();
+    const dual = dualLoader.getExtensions();
+    assert.deepEqual(dual.errors, []);
+    assert.equal(dual.extensions.length, 2, 'both copies load');
+    const natives = dual.runtime.pendingNativeProviderRegistrations.filter(({ provider }) => provider.id === 'coralbricks');
+    assert(natives.at(-1).extensionPath.startsWith(newer), 'the newer copy serves coralbricks');
+    assert.deepEqual(dual.extensions.flatMap(extension => [...extension.commands.keys()]), ['coralbricks-settings']);
+    const requests = [];
+    globalThis.fetch = async (url) => {
+      requests.push(String(url));
+      return Response.json({ data: [{ id: 'probe-dual-model', context_length: 131072, pricing: { input_per_m: 1, output_per_m: 2 } }] });
+    };
+    const dualRuntime = await ModelRuntime.create({ authPath: authFile, modelsPath: null, modelsStorePath: join(home, 'models-cache-dual'), allowModelNetwork: false });
+    const { session: dualSession } = await createAgentSession({ cwd: home, agentDir: home, resourceLoader: dualLoader, modelRuntime: dualRuntime,
+      settingsManager: dualSettings, sessionManager: SessionManager.inMemory(home) });
+    try {
+      const dualErrors = [];
+      await dualSession.bindExtensions({ mode: 'print', onError: error => dualErrors.push(error) });
+      for (let i = 0; i < 100 && !dualRuntime.getAllModels('coralbricks').some(model => model.id === 'probe-dual-model'); i++) await new Promise(done => setTimeout(done, 10));
+      await new Promise(done => setTimeout(done, 50)); // let a second copy's sync, if any, land
+      assert(dualRuntime.getAllModels('coralbricks').some(model => model.id === 'probe-dual-model'), 'the owner synced the catalog');
+      assert.deepEqual(requests, ['https://inference.coralbricks.ai/v1/models'], 'one catalog sync for two copies');
+      await dualSession.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
+      assert.deepEqual(dualErrors, []);
+      dualChecks++;
+    } finally {
+      dualSession.dispose();
+      globalThis.fetch = offlineFetch;
+    }
+  }
+  console.log(JSON.stringify({ repo: manifest.name, pi: VERSION, hostEntry, extensions: loaded.extensions.length, tools: tools.size, models: modelCount, streamChecks, loginChecks, dualChecks, lifecycle: 'passed' }));
 } finally {
   session?.dispose(); globalThis.fetch = previousFetch;
   if (previousHome === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousHome;

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Register once when several copies load ([Coral-Bricks-AI/coralbricks-api#139](https://github.com/Coral-Bricks-AI/coralbricks-api/issues/139)). A standalone install and a copy bundled in another Pi package, such as pi-fabric, now share a process-global registry (`Symbol.for("pi-coralbricks-provider.registry.v1")`) scoped to the Pi extension runtime. Only the newest version registers `coralbricks`, syncs `/v1/models` and adds `/coralbricks-settings`, whichever order the copies load in. A newer copy that loads later takes over before the session starts. Ownership ends with the session, so `/reload` and session switches start clean. Copies before this release do not take part.
 - Make no network request without a key ([Coral-Bricks-AI/coralbricks-api#139](https://github.com/Coral-Bricks-AI/coralbricks-api/issues/139)). Session start no longer fetches the public catalog when no key is configured: the cached or embedded catalog serves until `/login coralbricks` or a key resolves, then the authenticated `/v1/models` syncs as before. `scripts/update-models.js` keeps its public-catalog fallback for maintainers.
 
 ## 1.0.31
