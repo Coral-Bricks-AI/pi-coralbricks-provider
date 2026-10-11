@@ -172,12 +172,12 @@ saving. If editing the file manually, run `/reload` to apply it.
 
 The Coral API key can be configured in multiple ways (resolved in this order):
 
-1. **`auth.json`** (recommended) — Run `/login coralbricks` inside pi and paste your key; pi saves it to `~/.pi/agent/auth.json` and refreshes the model list from the authenticated `/v1/models`. Or add it by hand:
+1. **Runtime override** — Use the `--api-key` CLI flag
+2. **`auth.json`** (recommended) — Run `/login coralbricks` inside pi and paste your key; pi saves it to `~/.pi/agent/auth.json` and refreshes the model list from the authenticated `/v1/models`. Or add it by hand:
    ```json
    { "coralbricks": { "type": "api_key", "key": "cb_your-key" } }
    ```
    The `key` field supports literal values, env var names, and shell commands (prefix with `!`). `/logout` (pick CoralBricks) removes the stored key; `CORALBRICKS_API_KEY` is left alone.
-2. **Runtime override** — Use the `--api-key` CLI flag
 3. **Environment variable** — Set `CORALBRICKS_API_KEY`
 
 With [localterm](https://www.npmjs.com/package/localterm), store it once and it's exposed everywhere:
