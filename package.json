@@ -38,6 +38,7 @@
   "files": [
     "index.ts",
     "settings.ts",
+    "auth.ts",
     "park.ts",
     "models.json",
     "deprecated-models.json",

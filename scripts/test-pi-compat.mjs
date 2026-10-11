@@ -1,4 +1,4 @@
-// Offline Pi 1.1.0 manifest, lifecycle, catalog and real transport regression.
+// Offline Pi 1.1.0 manifest, lifecycle, catalog, /login and real transport regression.
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,8 @@ const previousHome = process.env.PI_CODING_AGENT_DIR;
 const previousFetch = globalThis.fetch;
 process.env.PI_CODING_AGENT_DIR = home;
 // Never allow a background catalog/account request to reach a real endpoint.
-globalThis.fetch = async () => new Response('', { status: 503 });
+const offlineFetch = async () => new Response('', { status: 503 });
+globalThis.fetch = offlineFetch;
 let session;
 try {
   const host = process.env.PI1_HOST_PACKAGE;
@@ -36,7 +37,13 @@ try {
   assert.equal(loaded.extensions.length, manifest.pi.extensions.length, 'all manifest entrypoints load');
   // Endpoint/header-only re-registration (e.g. MCR) retains the prior catalog.
   const registrations = [...loaded.runtime.pendingProviderRegistrations.reduce((byName, { name, config }) =>
-    byName.set(name, { name, config: { ...byName.get(name)?.config, ...config } }), new Map()).values()];
+    byName.set(name, { name, models: (config.models ?? byName.get(name)?.models), config: { ...byName.get(name)?.config, ...config } }), new Map()).values()];
+  // Native pi-ai providers (`pi.registerProvider(provider)`); the last registration per id wins.
+  for (const { provider } of loaded.runtime.pendingNativeProviderRegistrations ?? []) {
+    const index = registrations.findIndex(({ name }) => name === provider.id);
+    const entry = { name: provider.id, models: provider.getAllModels?.() ?? provider.getModels(), provider };
+    if (index >= 0) registrations[index] = entry; else registrations.push(entry);
+  }
   assert(registrations.length > 0, 'providers register before session startup');
   const modelRuntime = await ModelRuntime.create({ authPath: join(home, 'auth.json'), modelsPath: null, modelsStorePath: join(home, 'models-cache'), allowModelNetwork: false });
   ({ session } = await createAgentSession({ cwd: home, agentDir: home, resourceLoader, modelRuntime, settingsManager, sessionManager: SessionManager.inMemory(home) }));
@@ -50,9 +57,9 @@ try {
     assert(session.getAllTools().some(tool => tool.name === name));
   }
   let modelCount = 0, streamChecks = 0;
-  for (const { name, config } of registrations) {
+  for (const { name, models: registered } of registrations) {
     const models = modelRuntime.getAllModels(name);
-    assert.equal(models.length, config.models.length, `${name}: catalog survives registration`);
+    assert.equal(models.length, registered.length, `${name}: catalog survives registration`);
     assert(models.length > 0);
     assert.equal(new Set(models.map(m => `${m.type}/${m.id}`)).size, models.length);
     for (const model of models) {
@@ -105,9 +112,41 @@ try {
     assert.equal(aborted.stopReason, 'aborted', aborted.errorMessage); streamChecks++;
     modelCount += models.length;
   }
+  // /login <provider>: the host's own API-key flow stores the key in auth.json,
+  // the post-login catalog refresh fetches /v1/models with it, and /logout removes it.
+  let loginChecks = 0;
+  const authFile = join(home, 'auth.json');
+  const readAuth = async () => JSON.parse(await readFile(authFile, 'utf8').catch(() => '{}'));
+  for (const { name } of registrations) {
+    const provider = modelRuntime.getProvider(name);
+    if (!provider?.auth.apiKey?.login) continue;
+    const prompts = [], notices = [], requests = [];
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url: String(url), authorization: init?.headers?.Authorization });
+      return String(url).endsWith('/v1/models')
+        ? Response.json({ data: [{ id: 'probe-login-model', context_length: 131072, pricing: { input_per_m: 1, output_per_m: 2 } }] })
+        : new Response('', { status: 503 });
+    };
+    try {
+      await modelRuntime.login(name, 'api_key', { prompt: async prompt => { prompts.push(prompt); return 'probe-login-key'; }, notify: event => notices.push(event) });
+      assert.deepEqual((await readAuth())[name], { type: 'api_key', key: 'probe-login-key' }, `${name}: /login stores an api_key credential`);
+      assert(prompts.some(prompt => prompt.type === 'secret'), `${name}: /login prompts for a secret`);
+      assert.equal((await modelRuntime.getAuth(name))?.auth.apiKey, 'probe-login-key');
+      const refreshed = await modelRuntime.refresh({ providers: [name], allowNetwork: true });
+      assert.equal(refreshed.errors.size, 0, `${name}: post-login catalog refresh`);
+      assert(requests.some(request => request.authorization === 'Bearer probe-login-key'), `${name}: catalog fetched with the new key`);
+      assert(modelRuntime.getAllModels(name).some(model => model.id === 'probe-login-model'), `${name}: authenticated catalog published`);
+      await modelRuntime.logout(name);
+      assert.equal((await readAuth())[name], undefined, `${name}: /logout removes the credential`);
+      loginChecks++;
+    } finally {
+      globalThis.fetch = offlineFetch;
+    }
+  }
+  assert(loginChecks > 0, 'a registered provider offers /login');
   await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ repo: manifest.name, pi: VERSION, hostEntry, extensions: loaded.extensions.length, tools: tools.size, models: modelCount, streamChecks, lifecycle: 'passed' }));
+  console.log(JSON.stringify({ repo: manifest.name, pi: VERSION, hostEntry, extensions: loaded.extensions.length, tools: tools.size, models: modelCount, streamChecks, loginChecks, lifecycle: 'passed' }));
 } finally {
   session?.dispose(); globalThis.fetch = previousFetch;
   if (previousHome === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousHome;

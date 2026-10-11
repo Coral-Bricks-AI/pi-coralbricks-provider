@@ -27,7 +27,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
 - **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
-- **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models` (or the unauthenticated [public catalog](https://www.coralbricks.ai/api/public/models) before auth), hot-swapped at session start
+- **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models` (or the unauthenticated [public catalog](https://www.coralbricks.ai/api/public/models) before auth), hot-swapped at session start and after `/login`
 - **synbad-validated** — [synbad](https://github.com/synthetic-lab/synbad) tool-calling and reasoning-parsing evals pass 13/13 in every run on GLM 5.3 in both unary and streaming modes
 
 ## Installation
@@ -49,7 +49,7 @@ pi install npm:pi-coralbricks-provider
 Then set your API key and run pi:
 
 ```bash
-# Recommended: add to auth.json
+# Recommended: run /login coralbricks inside pi (saves it to auth.json)
 # See Authentication section below
 
 # Or set as environment variable
@@ -69,7 +69,7 @@ pi
 
 2. Set your Coral API key:
    ```bash
-   # Recommended: add to auth.json
+   # Recommended: run /login coralbricks inside pi (saves it to auth.json)
    # See Authentication section below
 
    # Or set as environment variable
@@ -172,11 +172,11 @@ saving. If editing the file manually, run `/reload` to apply it.
 
 The Coral API key can be configured in multiple ways (resolved in this order):
 
-1. **`auth.json`** (recommended) — Add to `~/.pi/agent/auth.json`:
+1. **`auth.json`** (recommended) — Run `/login coralbricks` inside pi and paste your key; pi saves it to `~/.pi/agent/auth.json` and refreshes the model list from the authenticated `/v1/models`. Or add it by hand:
    ```json
    { "coralbricks": { "type": "api_key", "key": "cb_your-key" } }
    ```
-   The `key` field supports literal values, env var names, and shell commands (prefix with `!`).
+   The `key` field supports literal values, env var names, and shell commands (prefix with `!`). `/logout` (pick CoralBricks) removes the stored key; `CORALBRICKS_API_KEY` is left alone.
 2. **Runtime override** — Use the `--api-key` CLI flag
 3. **Environment variable** — Set `CORALBRICKS_API_KEY`
 

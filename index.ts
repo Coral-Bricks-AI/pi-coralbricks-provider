@@ -16,8 +16,8 @@
  * Merge order: [live|cache|embedded] → apply patch.json → merge custom-models.json
  *
  * Usage:
- *   # Option 1: Store in auth.json (recommended)
- *   # Add to ~/.pi/agent/auth.json:
+ *   # Option 1: /login coralbricks inside pi (stores the key in auth.json), or
+ *   # add to ~/.pi/agent/auth.json yourself:
  *   #   "coralbricks": { "type": "api_key", "key": "cb_your-key" }
  *
  *   # Option 2: Set as environment variable
@@ -31,10 +31,12 @@
  */
 
 import { getAgentDir, type ExtensionAPI, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { lazyStream, type Api, type Credential, type Model, type RefreshModelsContext } from "@earendil-works/pi-ai";
 import type { AssistantMessageEventStream, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { clampThinkingLevel, streamOpenAICompletions, streamOpenAIResponses } from "@earendil-works/pi-ai/compat";
 import { loadConfig, registerSettingsCommand } from "./settings";
 import { park, planPark, withParkFallback, type ParkPlan } from "./park";
+import { coralApiKeyAuth, CORALBRICKS_ENV_VAR } from "./auth";
 import modelsData from "./models.json" with { type: "json" };
 import customModelsData from "./custom-models.json" with { type: "json" };
 import patchData from "./patch.json" with { type: "json" };
@@ -182,6 +184,7 @@ function buildModels(base: JsonModel[], custom: JsonModel[], patch: PatchData): 
 // Stale-While-Revalidate Model Sync
 
 const PROVIDER_ID = "coralbricks";
+const PROVIDER_NAME = "CoralBricks";
 const BASE_URL = "https://inference.coralbricks.ai/v1";
 const MODELS_URL = `${BASE_URL}/models`;
 const PUBLIC_CATALOG_URL = "https://www.coralbricks.ai/api/public/models";
@@ -467,8 +470,8 @@ export function streamCoral(
   const apiKey = options?.apiKey || cachedApiKey || "";
   if (!apiKey) {
     throw new Error(
-      `No API key for CoralBricks. Add it to ~/.pi/agent/auth.json ` +
-      `("coralbricks"), set CORALBRICKS_API_KEY, or use --api-key.`,
+      `No API key for CoralBricks. Run /login coralbricks, add it to ` +
+      `~/.pi/agent/auth.json ("coralbricks"), set CORALBRICKS_API_KEY, or use --api-key.`,
     );
   }
 
@@ -542,6 +545,23 @@ async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
   cachedApiKey = (await modelRegistry.getApiKeyForProvider(PROVIDER_ID)) ?? undefined;
 }
 
+/**
+ * The chat models Pi composes from a `pi.registerProvider(name, config)` catalog:
+ * each row bound to this provider's id, endpoint and selected API. The native
+ * registration below serves exactly these, so ids, pricing, thinking maps and
+ * compat flags reach Pi unchanged.
+ */
+function toProviderModels(models: JsonModel[], api: Api): Model<Api>[] {
+  return models.map((model) => ({ ...model, api, provider: PROVIDER_ID, baseUrl: BASE_URL, headers: undefined }) as unknown as Model<Api>);
+}
+
+/** The key a refresh should fetch with: Pi's own resolution when a session exposed it. */
+async function refreshApiKey(modelRegistry: ModelRegistry | undefined, credential: Credential | undefined): Promise<string | undefined> {
+  if (modelRegistry) return (await modelRegistry.getApiKeyForProvider(PROVIDER_ID)) ?? undefined;
+  if (credential?.type === "api_key" && credential.key) return credential.key;
+  return process.env[CORALBRICKS_ENV_VAR] || undefined;
+}
+
 // Extension Entry Point
 
 export default function (pi: ExtensionAPI) {
@@ -552,15 +572,52 @@ export default function (pi: ExtensionAPI) {
   let config = loadConfig();
   let currentModels = buildModels(loadStaleModels(embeddedModels), customModels, patches);
   const selectedApi = () => config.api === "responses" ? "openai-responses" : "openai-completions";
+  let providerModels = toProviderModels(currentModels, selectedApi());
+
+  // The key the catalog was last revalidated with (null: not yet this process).
+  // Pi refreshes catalogs on startup, on /model and after /login; only a changed
+  // key (a fresh /login, --api-key) or a forced refresh re-fetches /v1/models,
+  // so session-start revalidation stays the one routine fetch.
+  let revalidatedKey: string | undefined | null = null;
+  let keySync: Promise<void> = Promise.resolve();
+  let modelRegistry: ModelRegistry | undefined;
+
+  async function refreshModels(context: RefreshModelsContext): Promise<void> {
+    if (!context.allowNetwork) return;
+    await keySync;
+    const apiKey = await refreshApiKey(modelRegistry, context.credential);
+    if (context.signal.aborted || (!context.force && apiKey === revalidatedKey)) return;
+    revalidatedKey = apiKey;
+    cachedApiKey = apiKey;
+    revalidateAbort?.abort(); // a newer credential supersedes an in-flight session revalidation
+    const freshBase = await revalidateModels(apiKey, embeddedModels, context.signal);
+    if (!freshBase || context.signal.aborted) return;
+    const next = buildModels(freshBase, customModels, patches);
+    await context.publish({
+      update: () => {
+        currentModels = next;
+        providerModels = toProviderModels(next, selectedApi());
+      },
+    });
+  }
+
   function registerProvider() {
-    pi.registerProvider(PROVIDER_ID, {
+    providerModels = toProviderModels(currentModels, selectedApi());
+    // An already-selected model may still carry the previous API. Snapshot
+    // the current selection per request, without mutating that model/history.
+    const stream = (model: Model<any>, context: any, options?: any) =>
+      lazyStream(model, async () => streamCoral({ ...model, api: selectedApi() }, context, options, { park: config.park }));
+    // Native provider (pi-ai `Provider`): the same catalog and stream as the
+    // config form, plus API-key auth with a `/login coralbricks` flow.
+    pi.registerProvider({
+      id: PROVIDER_ID,
+      name: PROVIDER_NAME,
       baseUrl: BASE_URL,
-      apiKey: "$CORALBRICKS_API_KEY",
-      api: selectedApi(),
-      models: currentModels,
-      // An already-selected model may still carry the previous API. Snapshot
-      // the current selection per request, without mutating that model/history.
-      streamSimple: (model, context, options) => streamCoral({ ...model, api: selectedApi() }, context, options, { park: config.park }),
+      auth: { apiKey: coralApiKeyAuth() },
+      getModels: () => providerModels,
+      refreshModels,
+      stream,
+      streamSimple: stream,
     });
   }
   registerProvider();
@@ -570,10 +627,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    modelRegistry = ctx.modelRegistry;
     revalidateAbort?.abort();
     revalidateAbort = new AbortController();
     const signal = revalidateAbort.signal;
-    void resolveApiKey(ctx.modelRegistry)
+    const resolved = resolveApiKey(ctx.modelRegistry);
+    keySync = resolved.then(() => { revalidatedKey = cachedApiKey; }, () => {});
+    void resolved
       .then(() => revalidateModels(cachedApiKey, embeddedModels, signal))
       .then((freshBase) => {
         if (freshBase && !signal.aborted) {

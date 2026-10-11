@@ -18,7 +18,7 @@ export function getAgentDir(): string {
 }
 
 export interface ExtensionAPI {
-  registerProvider(_name: string, _provider: any): void;
+  registerProvider(_providerOrName: any, _config?: any): void;
   registerCommand(_name: string, _command: any): void;
   on(_event: string, _handler: any): void;
   appendEntry(_type: string, _data: any): void;

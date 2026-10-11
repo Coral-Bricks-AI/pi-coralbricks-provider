@@ -166,7 +166,12 @@ describe("provider registration", () => {
     const { default: extension } = await import("../index");
     const pi = {registerProvider:vi.fn(),registerCommand:vi.fn(),on:vi.fn()};
     extension(pi as any);
-    const latest = () => pi.registerProvider.mock.calls.at(-1)![1];
+    // The native provider, viewed through the config-form fields these tests pinned.
+    const latest = () => {
+      const provider = pi.registerProvider.mock.calls.at(-1)![0];
+      const models = provider.getModels();
+      return {provider, models, api:models[0].api, baseUrl:provider.baseUrl, streamSimple:provider.streamSimple};
+    };
     const handler = pi.registerCommand.mock.calls[0][1].handler;
     return {pi, latest, handler};
   }
@@ -174,7 +179,9 @@ describe("provider registration", () => {
     if (api === "responses") saveApi(api);
     const {latest} = await setup();
     expect(latest().api).toBe(api === "responses" ? "openai-responses" : "openai-completions");
-    expect(latest().apiKey).toBe("$CORALBRICKS_API_KEY");
+    const env = async (name:string) => name === "CORALBRICKS_API_KEY" ? "env-key" : undefined;
+    const resolved = await latest().provider.auth.apiKey.resolve({ctx:{env, fileExists:async()=>false}, signal:new AbortController().signal});
+    expect(resolved?.auth.apiKey).toBe("env-key");
   });
   it("keeps opt-in across in-flight refresh and fresh models across toggles", async () => {
     let finish!: (r:Response) => void;
