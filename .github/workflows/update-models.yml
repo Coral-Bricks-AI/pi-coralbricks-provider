@@ -27,10 +27,22 @@ jobs:
         with:
           node-version: 24
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
       - name: Fetch the model catalog
         env:
           CORALBRICKS_API_KEY: ${{ secrets.CORALBRICKS_API_KEY }}
         run: node scripts/update-models.js
+
+      # Gate the sync with the same checks publish.yml runs, before anything is
+      # committed, tagged or pushed. A red check must leave main and tags alone.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck and test
+        run: bun run check
 
       - name: Commit, bump and push
         env:
