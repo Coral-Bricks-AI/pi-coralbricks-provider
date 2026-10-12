@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { streamCoral, buildModels, BASE_URL } from "../index";
+import { streamCoral, BASE_URL } from "../index";
 import { clearParked, planPark } from "../park";
-import models from "../models.json";
-import patches from "../patch.json";
+import { fixtureCatalog } from "./model-fixtures";
 
-const catalog = buildModels(models as any, [], patches as any);
+const catalog = fixtureCatalog();
 const model = (id = catalog[0].id) => ({...catalog.find(m=>m.id === id)!, provider:"coralbricks", baseUrl:BASE_URL, api:"openai-responses"});
 const tools = [{name:"lookup",description:"Lookup city",parameters:{type:"object",properties:{city:{type:"string"}},required:["city"]}}];
 const system = {role:"system", content:"Use tools", toolsAdded:tools, timestamp:0};
