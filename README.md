@@ -22,7 +22,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 
 ## Features
 
-- **2 reasoning models** from Coral's live catalog — GLM 5.3 and DeepSeek V4.1 Flash (their delisted `-fp4` twin slugs stay hidden so a stale cache or a grace-period catalog never lists them)
+- **2 reasoning models** from Coral's live catalog — GLM 5.3 and DeepSeek V4.1 Flash
 - **1M token context** on GLM and DeepSeek, with vision (image input) on DeepSeek V4.1 Flash
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
@@ -239,7 +239,7 @@ Validated with [synbad](https://github.com/synthetic-lab/synbad) — Synthetic's
 
 | Model | Unary | Stream | Notes |
 |-------|-------|--------|-------|
-| GLM 5.3 FP4 | 13/13 ✅ | 13/13 ✅ | 5/5 runs |
+| GLM 5.3 | 13/13 ✅ | 13/13 ✅ | 5/5 runs |
 | GLM 5.3 Flash (retired) | 12/13 ⚠️ | 12/13 ⚠️ | `reasoning/reasoning-parsing` passes 4 of 5 runs; see below |
 | GPT-OSS 120B (retired) | 12/13 ⚠️ | 12/13 ⚠️ | `tools/parallel-tool` 0 of 5 runs, before Coral retired the model |
 | DeepSeek V4.1 Flash | 12/13 ⚠️ | 12/13 ⚠️ | `tools/octo-list-no-optional-args` passes 1 of 5 runs; see below |
