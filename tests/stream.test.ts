@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { streamCoral, buildModels, BASE_URL } from "../index";
-import models from "../models.json";
-import patches from "../patch.json";
-const catalog = buildModels(models as any, [], patches as any);
+import { streamCoral, BASE_URL } from "../index";
+import { fixtureCatalog } from "./model-fixtures";
+const catalog = fixtureCatalog();
 const model = (api = "openai-responses", id = catalog[0].id) => ({...catalog.find(m=>m.id === id)!, provider:"coralbricks", baseUrl:BASE_URL, api});
 const user = {role:"user", content:"Hello", timestamp:1};
 function sse(events: object[]) {
