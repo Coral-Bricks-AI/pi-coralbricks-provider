@@ -46,6 +46,14 @@ describe("transformApiModel (/v1/models rows)", () => {
   it("keeps Coral's free cached reads at cacheRead: 0", () => {
     const m = transformApiModel(v1DeepSeekRow)!;
     expect(m.cost.cacheRead).toBe(0);
+    // The fixture API rows mirror Coral's cached_input_per_m: 0, so the
+    // free-cached-read contract is asserted on fixture-format rows without
+    // pinning the real (regenerated) models.json.
+    expect(DEEPSEEK_FLASH_ROW.pricing.cached_input_per_m).toBe(0);
+    expect(GLM_FAST_ROW.pricing.cached_input_per_m).toBe(0);
+    for (const row of fixtureCatalog()) {
+      expect(row.cost.cacheRead).toBe(0);
+    }
   });
 
   it("prices a written token at input + cache_write_per_m, and 0 when a row omits it", () => {
@@ -90,8 +98,11 @@ describe("applyPatch", () => {
     baseModels.find((m) => m.id === "glm-5.3-fast")!,
     (patchData as any)["glm-5.3-fast"],
   );
-  expect(base.reasoning).toBe(true);
-  expect(base.compat?.thinkingFormat).toBe("zai");
+
+  it("applies the real patch.json entry for the -fast slug", () => {
+    expect(base.reasoning).toBe(true);
+    expect(base.compat?.thinkingFormat).toBe("zai");
+  });
 
   it("merges cost fields selectively", () => {
     const patched = applyPatch(base, { cost: { output: 5 } });
@@ -229,17 +240,20 @@ describe("embedded model catalog invariants", () => {
     }
   });
 
-  it("has well-formed costs with free cached reads on every embedded model", () => {
+  it("has well-formed, non-negative costs and limits on every embedded model", () => {
     for (const m of models) {
       for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
-        expect(typeof m.cost[key]).toBe("number");
+        expect(Number.isFinite(m.cost[key])).toBe(true);
+        expect(m.cost[key]).toBeGreaterThanOrEqual(0);
       }
-      expect(m.cost.cacheRead).toBe(0); // Coral: cached input is free
-      expect(m.contextWindow).toBeGreaterThanOrEqual(131072);
+      expect(m.contextWindow).toBeGreaterThan(0);
       expect(m.maxTokens).toBeGreaterThan(0);
     }
     for (const m of effective) {
-      expect(m.cost.cacheRead).toBe(0);
+      for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+        expect(Number.isFinite(m.cost[key])).toBe(true);
+        expect(m.cost[key]).toBeGreaterThanOrEqual(0);
+      }
     }
   });
 
@@ -350,9 +364,19 @@ describe("patch.json curation", () => {
     expect(byId["deepseek-v4.1-flash-fast"].cost).toMatchObject({ input: 0.01, output: 1.2, cacheWrite: 0.09 });
   });
 
-  it("flags vision from the live API flag, with patch.json restoring the -fast rows' image input", () => {
-    // The -fast API rows omit supports_image_input, so patch.json supplies it;
-    // the fixture GLM row is text-only.
+  it("flags vision from the live API flag, and patch.json restores image input on a row that lacks it", () => {
+    // The fixture DeepSeek row itself reports supports_image_input: true, so the
+    // live flag alone already yields image input, and patch.json also sets
+    // input: ["text", "image"] for the same id. Prove the patch contribution
+    // independently: a DeepSeek row WITHOUT supports_image_input still gets
+    // image input from the real patch.json. The fixture GLM row is text-only
+    // and patch.json leaves its input alone.
+    const { supports_image_input: _omit, ...textOnlyDeepSeekRow } = DEEPSEEK_FLASH_ROW;
+    const textOnlyDeepSeek = transformApiModel(textOnlyDeepSeekRow)!;
+    expect(textOnlyDeepSeek.input).toEqual(["text"]);
+    const restored = buildModels([textOnlyDeepSeek], [], patchData as any);
+    expect(restored.find((m) => m.id === "deepseek-v4.1-flash-fast")!.input).toContain("image");
+
     const byId = Object.fromEntries(fixtureCatalog().map((m) => [m.id, m]));
     expect(byId["deepseek-v4.1-flash-fast"].input).toContain("image");
     expect(byId["glm-5.3-fast"].input).toEqual(["text"]);
