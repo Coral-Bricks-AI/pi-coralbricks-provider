@@ -217,21 +217,14 @@ describe("embedded model catalog invariants", () => {
     }
   });
 
-  it("offers only the canonical -fast slugs, keeping the -fp4 twins hidden", () => {
+  it("offers the canonical -fast slugs", () => {
     // models.json mirrors the per-key /v1/models set. Coral stopped serving the
-    // -fp4 twins on 2026-10-12, so only the -fast slugs remain live…
+    // hidden -fp4 twins on 2026-10-12, so only the -fast slugs remain…
     expect(models.map((m) => m.id).sort()).toEqual(["deepseek-v4.1-flash-fast", "glm-5.3-fast"]);
-    // …and the provider catalog (what pi's /model lists) never shows a twin,
-    // whether Coral serves it or deprecated-models.json parks it for the grace
-    // period; the hidden flag itself never reaches pi.
-    const twins = deprecatedModels
-      .filter((m) => m.id.endsWith("-fp4"))
-      .map(({ deprecatedAt: _deprecatedAt, ...model }) => model);
-    for (const base of [models, [...models, ...twins]]) {
-      const effective = buildModels(base as any, customModelsData as any, patchData as any);
-      expect(effective.map((m) => m.id)).toEqual(["deepseek-v4.1-flash-fast", "glm-5.3-fast"]);
-      expect(effective.every((m) => (m as { hidden?: boolean }).hidden === undefined)).toBe(true);
-    }
+    // …and the provider catalog (what pi's /model lists) is exactly that.
+    const effective = buildModels(models as any, customModelsData as any, patchData as any);
+    expect(effective.map((m) => m.id)).toEqual(["deepseek-v4.1-flash-fast", "glm-5.3-fast"]);
+    expect(effective.every((m) => (m as { hidden?: boolean }).hidden === undefined)).toBe(true);
   });
 
   it("gives every -fast slug the reasoning settings its legacy -fp4 id carried", () => {
@@ -359,22 +352,14 @@ describe("embedded model catalog invariants", () => {
     expect(byId["glm-5.3-fast"].input).toEqual(["text"]);
   });
 
-  it("curates every live model via patch.json, hiding the -fp4 twins", () => {
+  it("curates every live model via patch.json, and nothing else", () => {
     // Coral's rows carry no reasoning or display name, so every id in
-    // models.json needs a patch entry. The only other entries are the hidden
-    // -fp4 twins: Coral delisted them, and their entries keep them out of
-    // /model while deprecated-models.json parks them for the grace period.
-    // Drop those entries once update-models.js has evicted the twins.
-    const live = modelsData.map((m) => m.id);
-    expect(live.filter((id) => !(id in patchData))).toEqual([]);
+    // models.json needs a patch entry; an entry for a model Coral no longer
+    // serves is dead. update-models.js drops delisted hidden models at once, so
+    // the -fp4 twins' entries went with them.
+    expect(Object.keys(patchData).sort()).toEqual(modelsData.map((m) => m.id).sort());
     expect(customModelsData).toEqual([]);
-    const extra = Object.keys(patchData).filter((id) => !live.includes(id)).sort();
-    expect(extra).toEqual(["deepseek-v4.1-flash-fast-fp4", "glm-5.3-fp4"]);
-    const hidden = Object.entries(patchData as Record<string, any>)
-      .filter(([, entry]) => entry.hidden === true)
-      .map(([id]) => id)
-      .sort();
-    expect(hidden).toEqual(extra);
+    expect(Object.values(patchData as Record<string, any>).filter((entry) => entry.hidden === true)).toEqual([]);
   });
 });
 

@@ -209,7 +209,7 @@ Verified against the live gateway:
 
 | Model | Format | off | low | medium | high | max |
 |-------|--------|-----|-----|--------|------|-----|
-| GLM 5.3 FP4 | `thinking: {type}` + `reasoning_effort` | ✅ | ✅ | — | ✅ | ✅ |
+| GLM 5.3 FP4 (delisted) | `thinking: {type}` + `reasoning_effort` | ✅ | ✅ | — | ✅ | ✅ |
 | GLM 5.3 Flash (retired) | `thinking: {type}` + `reasoning_effort` | ✅ | ✅ | — | ✅ | ✅ |
 | DeepSeek V4.1 Flash | `reasoning_effort` | ✅ | ✅ | — | ✅ | ✅ |
 
@@ -228,7 +228,7 @@ Coral's gateway follows the OpenAI Chat Completions API:
 
 ### Patch Overrides & Custom Models
 
-- **`patch.json`** — per-model overrides applied on top of `models.json` (reasoning flags, pricing corrections, compat settings, thinking level maps, `"hidden"`). One entry per model Coral serves: GLM 5.3 and DeepSeek V4.1 Flash carry the reasoning and compat settings. Their `-fp4` twins, which Coral stopped serving on 2026-10-12, keep `"hidden": true` while `deprecated-models.json` parks them for the grace period, so `/model` and the table above list each model once.
+- **`patch.json`** — per-model overrides applied on top of `models.json` (reasoning flags, pricing corrections, compat settings, thinking level maps, `"hidden"`). One entry per model Coral serves: GLM 5.3 and DeepSeek V4.1 Flash carry the reasoning and compat settings.
 - **`custom-models.json`** — full model definitions for models Coral doesn't list. Merged after patch.
 
 Merge order: `[live|cache|embedded] → patch.json → custom-models.json`
@@ -239,7 +239,7 @@ Validated with [synbad](https://github.com/synthetic-lab/synbad) — Synthetic's
 
 | Model | Unary | Stream | Notes |
 |-------|-------|--------|-------|
-| GLM 5.3 FP4 | 13/13 ✅ | 13/13 ✅ | 5/5 runs |
+| GLM 5.3 FP4 (delisted) | 13/13 ✅ | 13/13 ✅ | 5/5 runs |
 | GLM 5.3 Flash (retired) | 12/13 ⚠️ | 12/13 ⚠️ | `reasoning/reasoning-parsing` passes 4 of 5 runs; see below |
 | GPT-OSS 120B (retired) | 12/13 ⚠️ | 12/13 ⚠️ | `tools/parallel-tool` 0 of 5 runs, before Coral retired the model |
 | DeepSeek V4.1 Flash | 12/13 ⚠️ | 12/13 ⚠️ | `tools/octo-list-no-optional-args` passes 1 of 5 runs; see below |
@@ -254,7 +254,7 @@ Reproduce:
 CORALBRICKS_API_KEY=cb_... node ../synbad/dist/source/index.js eval \
   --env-var CORALBRICKS_API_KEY \
   --base-url https://inference.coralbricks.ai/v1 \
-  --model glm-5.3-fp4 --count 1 --reasoning-effort high
+  --model glm-5.3-fast --count 1 --reasoning-effort high
 ```
 
 ## Model Sync
