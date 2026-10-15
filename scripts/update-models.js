@@ -482,6 +482,10 @@ function updateReadme(models) {
 // parked. Anything else — an unknown id, a key without access, a network
 // blip — keeps the grace period, because only `model_retired` is a statement
 // that the model is gone for everybody rather than missing for this key.
+//
+// A model patch.json hides skips the grace period too: it was never in the
+// registered catalog, so no session or saved setting can be using it, and
+// parking it only keeps a dead patch.json entry alive for two weeks.
 const DEPRECATED_MODEL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const RETIRED_PROBE_TIMEOUT_MS = 10000;
 
@@ -507,7 +511,7 @@ async function isRetiredUpstream(id, apiKey) {
   }
 }
 
-async function updateDeprecatedModels(modelsJsonPath, newModels, apiKey) {
+async function updateDeprecatedModels(modelsJsonPath, newModels, apiKey, hiddenIds = new Set()) {
   const deprecatedPath = path.join(path.dirname(modelsJsonPath), 'deprecated-models.json');
 
   let oldModels = [];
@@ -528,18 +532,22 @@ async function updateDeprecatedModels(modelsJsonPath, newModels, apiKey) {
   const resurrected = [];
   const evicted = [];
   const retired = [];
+  const hidden = [];
 
   const candidates = oldModels.filter((old) => old && old.id && !currentIds.has(old.id) && !deprecated[old.id]);
+  for (const old of candidates) if (hiddenIds.has(old.id)) hidden.push(old.id);
   // Probe the delisted models plus anything already parked: a model can retire
   // during its own grace period, which is exactly when it starts 404ing.
-  const parked = Object.keys(deprecated).filter((id) => !currentIds.has(id));
-  const toProbe = [...new Set([...candidates.map((m) => m.id), ...parked])];
+  // Hidden ones are dropped either way, so they are not probed.
+  const parked = Object.keys(deprecated).filter((id) => !currentIds.has(id) && !hiddenIds.has(id));
+  const toProbe = [...new Set([...candidates.filter((m) => !hiddenIds.has(m.id)).map((m) => m.id), ...parked])];
   const retiredIds = new Set(
     (await Promise.all(toProbe.map(async (id) => ((await isRetiredUpstream(id, apiKey)) ? id : null))))
       .filter((id) => id !== null)
   );
 
   for (const old of candidates) {
+    if (hiddenIds.has(old.id)) continue;   // never offered: nothing to keep working
     if (retiredIds.has(old.id)) {
       retired.push(old.id);
       continue;   // retired upstream: 404s, so a grace period buys nothing
@@ -559,6 +567,11 @@ async function updateDeprecatedModels(modelsJsonPath, newModels, apiKey) {
       retired.push(id);
       continue;
     }
+    if (hiddenIds.has(id)) {
+      delete deprecated[id];
+      hidden.push(id);
+      continue;
+    }
     const removedAt = Date.parse(entry && entry.deprecatedAt ? entry.deprecatedAt : '');
     if (Number.isNaN(removedAt) || Date.now() - removedAt > DEPRECATED_MODEL_TTL_MS) {
       delete deprecated[id];
@@ -566,9 +579,9 @@ async function updateDeprecatedModels(modelsJsonPath, newModels, apiKey) {
     }
   }
 
-  if (added.length > 0 || resurrected.length > 0 || evicted.length > 0 || retired.length > 0) {
+  if (added.length > 0 || resurrected.length > 0 || evicted.length > 0 || retired.length > 0 || hidden.length > 0) {
     fs.writeFileSync(deprecatedPath, JSON.stringify(deprecated, null, 2) + '\n');
-    console.log('Updated deprecated-models.json ' + JSON.stringify({ added, resurrected, evicted, retired }));
+    console.log('Updated deprecated-models.json ' + JSON.stringify({ added, resurrected, evicted, retired, hidden }));
   }
 }
 
@@ -617,12 +630,13 @@ async function main() {
 
     // Save models.json (pure API output, no patch/custom baked in)
     // Move delisted models to deprecated-models.json BEFORE models.json is overwritten
-    await updateDeprecatedModels(MODELS_JSON_PATH, models, apiKey);
+    const patchData = loadJson(PATCH_JSON_PATH);
+    const hiddenIds = new Set(Object.entries(patchData).filter(([, entry]) => entry && entry.hidden === true).map(([id]) => id));
+    await updateDeprecatedModels(MODELS_JSON_PATH, models, apiKey, hiddenIds);
     saveJson(MODELS_JSON_PATH, models);
 
     // Build the README model list: base → patch → custom. Grace-period models stay
     // servable at runtime (index.ts appends them) but are not listed as available.
-    const patchData = loadJson(PATCH_JSON_PATH);
     const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
     const readmeBase = models;
     const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);

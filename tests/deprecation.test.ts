@@ -86,6 +86,26 @@ describe("updateDeprecatedModels", () => {
     expect(Object.keys(ws.read())).toEqual(["gone-model"]);
   });
 
+  it("drops a delisted model patch.json hides instead of parking it, without probing it", async () => {
+    let probed = false;
+    const ws = workspace([model("glm-5.3-fast"), model("glm-5.3-fp4")]);
+    gateway([], () => { probed = true; });
+    await updateDeprecatedModels(ws.modelsPath, [model("glm-5.3-fast")], "cb_key", new Set(["glm-5.3-fp4"]));
+    expect(probed).toBe(false);
+    expect(ws.read()).toEqual({});
+  });
+
+  it("drops a parked model patch.json hides, mid grace period", async () => {
+    const parked = {
+      "glm-5.3-fp4": { ...model("glm-5.3-fp4"), deprecatedAt: new Date().toISOString() },
+      "gone-model": { ...model("gone-model"), deprecatedAt: new Date().toISOString() },
+    };
+    const ws = workspace([model("glm-5.3-fast")], parked);
+    gateway([]);
+    await updateDeprecatedModels(ws.modelsPath, [model("glm-5.3-fast")], "cb_key", new Set(["glm-5.3-fp4"]));
+    expect(Object.keys(ws.read())).toEqual(["gone-model"]);
+  });
+
   it("resurrects a parked model the live list carries again, without probing it", async () => {
     const parked = { "glm-5.3-fp4": { ...model("glm-5.3-fp4"), deprecatedAt: new Date().toISOString() } };
     const ws = workspace([model("glm-5.3-fp4")], parked);
