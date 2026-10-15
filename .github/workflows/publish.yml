@@ -1,86 +1,113 @@
-name: publish
+name: Publish
+
+# Releases of pi-coralbricks-provider go out from here, and only from here.
+#
+#   1. Bump "version" in package.json (the `chore(release): X.Y.Z` commit).
+#   2. Push it to main. This workflow publishes every version that npm does
+#      not have yet; any other push is a no-op.
+#
+# Run it from the Actions tab to retry a failed release, or tick "dry_run" to
+# build, check and pack without publishing.
+#
+# Auth is npm Trusted Publishing (OIDC): npm trusts this file, so no npm token
+# is stored anywhere. Registered once with
+#   npm trust github pi-coralbricks-provider --repo monotykamary/pi-coralbricks-provider --file publish.yml --allow-publish
+#
+# Bun installs and packs exactly as `bun publish` does; npm uploads the
+# tarballs because only the npm CLI speaks trusted publishing.
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: [package.json]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, check and pack, but do not publish
+        type: boolean
+        default: false
 
-# Auth is npm Trusted Publishing (OIDC) - no secret required. One-time setup at
-# https://www.npmjs.com/package/pi-coralbricks-provider/access with
-# publisher = GitHub Actions, org = monotykamary, repo = pi-coralbricks-provider,
-# workflow = publish.yml. Token fallback: add registry-url to setup-node and set
-# NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} on the publish step.
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
 
       - uses: actions/setup-node@v5
         with:
           node-version: 24
 
-      - name: Resolve the release tag
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Find versions npm does not have
         id: release
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          pkg="$(node -p "require('./package.json').version")"
-          tag="v$pkg"
-          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "::error::$tag does not exist - tag the release commit before publishing"
-            exit 1
-          fi
-
-          # The tarball comes from this ref, but the version is the tag's. Accept a
-          # ref ahead of the tag (e.g. a later CI commit) only when the files that
-          # get published are byte-identical to the tagged ones.
-          mapfile -t files < <(node -p "require('./package.json').files.join('\n')")
-          head_tree="$(git ls-tree -r HEAD -- "${files[@]}" | sort)"
-          tag_tree="$(git ls-tree -r "refs/tags/$tag" -- "${files[@]}" | sort)"
-          if [ "$head_tree" != "$tag_tree" ]; then
-            echo "::error::published files differ between $GITHUB_REF_NAME and $tag"
-            diff <(echo "$head_tree") <(echo "$tag_tree") || true
-            exit 1
-          fi
-
-          echo "version=$pkg" >> "$GITHUB_OUTPUT"
-          echo "Published files match $tag ($(git rev-parse --short "refs/tags/$tag"))"
-
-      - name: Check npm for an existing release
-        id: published
-        run: |
-          pkg="${{ steps.release.outputs.version }}"
-          if npm view "pi-coralbricks-provider@$pkg" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::pi-coralbricks-provider@$pkg is already on npm, nothing to publish"
+          specs=$(
+          node -p "const p = require('./package.json'); p.name + '@' + p.version"
+          )
+          missing=""
+          for spec in $specs; do
+            # npm runs from outside the checkout so the repo's devEngines do not apply.
+            if (cd "$RUNNER_TEMP" && npm view "$spec" version >/dev/null 2>&1); then
+              echo "$spec is already on npm"
+            else
+              missing="$missing $spec"
+            fi
+          done
+          if [ "$DRY_RUN" = "true" ]; then
+            mode=dry-run
+          elif [ -n "$missing" ]; then
+            mode=publish
+            echo "::notice::Publishing$missing"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            mode=skip
+            echo "::notice::Nothing to publish"
           fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        if: steps.published.outputs.exists == 'false'
+        if: steps.release.outputs.mode != 'skip'
         run: bun install --frozen-lockfile
 
-      - name: Typecheck and test
-        if: steps.published.outputs.exists == 'false'
+      - name: Check
+        if: steps.release.outputs.mode != 'skip'
         run: bun run check
 
-      - name: Publish to npm
-        if: steps.published.outputs.exists == 'false'
+      - name: Pack
+        if: steps.release.outputs.mode != 'skip'
         run: |
+          bun run --if-present prepublishOnly
+          bun pm pack --destination "$RUNNER_TEMP/pack"
+
+      - name: Publish
+        if: steps.release.outputs.mode != 'skip'
+        env:
+          MODE: ${{ steps.release.outputs.mode }}
+        run: |
+          # Trusted publishing needs npm 11.5.1 or newer.
           npm install --global npm@latest
-          npm publish --access public --provenance
+          cd "$RUNNER_TEMP"
+          for tarball in pack/*.tgz; do
+            spec=$(tar -xOzf "$tarball" package/package.json | node -p "const p = JSON.parse(require('fs').readFileSync(0, 'utf8')); p.name + '@' + p.version")
+            echo "::group::$spec"
+            tar -tzf "$tarball"
+            echo "::endgroup::"
+            if [ "$MODE" = "dry-run" ]; then
+              echo "Dry run: not publishing $spec"
+            elif npm view "$spec" version >/dev/null 2>&1; then
+              echo "$spec is already on npm"
+            else
+              npm publish "$tarball" --access public --provenance
+            fi
+          done

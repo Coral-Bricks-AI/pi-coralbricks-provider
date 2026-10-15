@@ -5,9 +5,9 @@ on:
     - cron: "7 0 * * *" # 07:07 Asia/Ho_Chi_Minh
   workflow_dispatch:
 
-# The release is tagged and handed to publish.yml, which owns npm Trusted
-# Publishing for this package. Tags pushed with GITHUB_TOKEN don't trigger
-# workflows, so publish.yml is dispatched explicitly.
+# This workflow only syncs the catalog and bumps the version; publish.yml does
+# the releasing. Pushes made with GITHUB_TOKEN don't trigger workflows, so
+# publish.yml is dispatched explicitly.
 permissions:
   contents: write
   actions: write
@@ -47,7 +47,6 @@ jobs:
           npm version patch --no-git-tag-version
           version=$(node -p "require('./package.json').version")
           git commit -am "chore(release): v$version"
-          git tag "v$version"
-          git push --atomic origin HEAD:main "refs/tags/v$version"
-          gh workflow run publish.yml --ref "v$version"
+          git push origin HEAD:main
+          gh workflow run publish.yml --ref main
           echo "Release v$version queued via publish.yml."
