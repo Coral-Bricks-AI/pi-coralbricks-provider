@@ -22,7 +22,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 
 ## Features
 
-- **2 reasoning models** from Coral's live catalog — GLM 5.3 and DeepSeek V4.1 Flash (the `-fp4` twin slugs Coral still serves are hidden as duplicates)
+- **2 reasoning models** from Coral's live catalog — GLM 5.3 and DeepSeek V4.1 Flash
 - **1M token context** on GLM and DeepSeek, with vision (image input) on DeepSeek V4.1 Flash
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
@@ -103,13 +103,13 @@ The copies find each other through a process-global registry (`Symbol.for("pi-co
 After loading the extension, use the `/model` command in pi to select your preferred model:
 
 ```
-/model coralbricks glm-5.3-fp4
+/model coralbricks glm-5.3-fast
 ```
 
 Or start pi directly with a Coral model:
 
 ```bash
-pi -e /path/to/pi-coralbricks-provider --model coralbricks/deepseek-v4.1-flash-fast-fp4:high
+pi -e /path/to/pi-coralbricks-provider --model coralbricks/deepseek-v4.1-flash-fast:high
 ```
 
 Thinking levels attach to the model id with `:<level>` — e.g. `:low`, `:high`, `:max`, or `:off` (GLM and DeepSeek).
@@ -228,7 +228,7 @@ Coral's gateway follows the OpenAI Chat Completions API:
 
 ### Patch Overrides & Custom Models
 
-- **`patch.json`** — per-model overrides applied on top of `models.json` (reasoning flags, pricing corrections, compat settings, thinking level maps, `"hidden"`). One entry per model Coral serves: GLM 5.3 and DeepSeek V4.1 Flash carry the reasoning and compat settings, and their `-fp4` twins set `"hidden": true` so `/model` and the table above list each model once.
+- **`patch.json`** — per-model overrides applied on top of `models.json` (reasoning flags, pricing corrections, compat settings, thinking level maps, `"hidden"`). One entry per model Coral serves: GLM 5.3 and DeepSeek V4.1 Flash carry the reasoning and compat settings. Their `-fp4` twins, which Coral stopped serving on 2026-10-12, keep `"hidden": true` while `deprecated-models.json` parks them for the grace period, so `/model` and the table above list each model once.
 - **`custom-models.json`** — full model definitions for models Coral doesn't list. Merged after patch.
 
 Merge order: `[live|cache|embedded] → patch.json → custom-models.json`
