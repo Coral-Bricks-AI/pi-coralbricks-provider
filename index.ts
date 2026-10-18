@@ -269,13 +269,26 @@ function baseCompat() {
   };
 }
 
+/**
+ * One price from a /v1/models price list. The authenticated rows carry numbers
+ * (`input_per_m`); Coral's contract also names string fields (`input: "1.25"`),
+ * which the unauthenticated rows use. Read either, so a key that gets the other
+ * shape is not silently priced from the embedded catalog.
+ */
+function priceField(pricing: any, perM: string, plain: string): number | undefined {
+  const value = pricing?.[perM] ?? pricing?.[plain];
+  const n = typeof value === "string" && value.trim() ? Number(value) : value;
+  return typeof n === "number" && Number.isFinite(n) ? n : undefined;
+}
+
 /** pi's cost for one of a /v1/models row's price lists (`pricing`, or a `pricing_plans` entry). */
 function toCost(pricing: any): JsonModel["cost"] {
+  const input = toNumber(priceField(pricing, "input_per_m", "input"));
   return {
-    input: toNumber(pricing?.input_per_m),
-    output: toNumber(pricing?.output_per_m),
-    cacheRead: toNumber(pricing?.cached_input_per_m),
-    cacheWrite: writtenTokenCost(toNumber(pricing?.input_per_m), pricing?.cache_write_per_m),
+    input,
+    output: toNumber(priceField(pricing, "output_per_m", "output")),
+    cacheRead: toNumber(priceField(pricing, "cached_input_per_m", "cached_input")),
+    cacheWrite: writtenTokenCost(input, priceField(pricing, "cache_write_per_m", "cache_write")),
   };
 }
 

@@ -3,14 +3,12 @@
     "reasoning": true,
     "input": ["text", "image"],
     "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max" },
-    "cost": { "cacheWrite": 0.09 },
     "compat": { "supportsReasoningEffort": true, "thinkingFormat": "openai" }
   },
   "glm-5.3-fast": {
     "reasoning": true,
     "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max" },
     "maxTokens": 131072,
-    "cost": { "cacheWrite": 1.68 },
     "compat": { "supportsReasoningEffort": true, "thinkingFormat": "zai" }
   }
 }

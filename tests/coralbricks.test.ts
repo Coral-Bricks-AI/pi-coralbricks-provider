@@ -81,6 +81,25 @@ describe("transformApiModel (/v1/models rows)", () => {
     expect(transformApiModel(v1DeepSeekRow)!.cacheOptimizedCost).toBeUndefined();
   });
 
+  it("reads the string price fields Coral's contract names as well", () => {
+    // contracts/SCHEMA.md: /v1/models prices as written ("1.25"), the shape the
+    // unauthenticated rows carry (2026-10-19).
+    const standard = { id: "glm-5.3-fast", context_length: 1048576,
+      pricing: { currency: "USD", unit: "per_1m_tokens", input: "1.25", output: "4.40", cached_input: "0.25", cache_write: "0.00", minimum_request: "0" },
+      pricing_plans: { cache_optimized: { input: "1.12", output: "4.40", cached_input: "0.00", cache_write: "0.56", header: "X-Coral-Pricing: cache-optimized" } } };
+    const m = transformApiModel(standard)!;
+    expect(m.cost).toEqual({ input: 1.25, output: 4.4, cacheRead: 0.25, cacheWrite: 1.25 });
+    expect(m.cacheOptimizedCost).toEqual({ input: 1.12, output: 4.4, cacheRead: 0, cacheWrite: 1.68 });
+    expect(transformApiModel({ id: "x", pricing: { input: "", output: "n/a" } })!.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("prices a Standard organization's written tokens at input, with no patch.json override", () => {
+    const live = transformApiModel({ id: "glm-5.3-fast", context_length: 1048576,
+      pricing: { cache_write_per_m: 0, cached_input_per_m: 0.25, input_per_m: 1.25, output_per_m: 4.4 } })!;
+    const glm = buildModels(mergeWithEmbedded([live], modelsData as any), [], patchData as any).find((m) => m.id === "glm-5.3-fast")!;
+    expect(glm.cost).toEqual({ input: 1.25, output: 4.4, cacheRead: 0.25, cacheWrite: 1.25 });
+  });
+
   it("returns null for rows without an id", () => {
     expect(transformApiModel(null)).toBeNull();
     expect(transformApiModel({})).toBeNull();
@@ -174,8 +193,7 @@ describe("mergeWithEmbedded (live vs curated)", () => {
     const { cache_write_per_m: _omitted, ...pricing } = v1DeepSeekRow.pricing;
     const live = transformApiModel({ ...v1DeepSeekRow, id: "glm-5.3-fast", pricing: { ...pricing, input_per_m: 1.12, output_per_m: 4.4 } })!;
     expect(live.cost.cacheWrite).toBe(0);
-    // The -fast slug's embedded row no longer carries the rate either, so
-    // patch.json is the durable source.
+    // The embedded row (models.json, synced from /v1/models) supplies it.
     const merged = buildModels(mergeWithEmbedded([live], modelsData as any), [], patchData as any);
     expect(merged.find((m) => m.id === "glm-5.3-fast")!.cost.cacheWrite).toBe(1.68);
   });
@@ -292,9 +310,8 @@ describe("embedded model catalog invariants", () => {
       expect(m.contextWindow).toBeGreaterThanOrEqual(131072);
       expect(m.maxTokens).toBeGreaterThan(0);
     }
-    // Coral bills uncached prompt tokens as cache writes, but the -fast API rows
-    // (and the public catalog) omit cache_write_per_m, so patch.json must supply
-    // it — the effective model is what a user actually gets.
+    // Coral bills uncached prompt tokens as cache writes; /v1/models reports the
+    // rate (cache_write_per_m) since 2026-10-08, and models.json carries it.
     const effective = buildModels(models as any, [], patchData as any);
     for (const m of effective) {
       expect(m.cost.cacheWrite).toBeGreaterThan(0);
@@ -302,7 +319,7 @@ describe("embedded model catalog invariants", () => {
   });
 
   it("keeps pricing aligned with Coral's published rates", () => {
-    // Effective = after patch.json; the raw -fast rows omit cacheWrite.
+    // Effective = after patch.json, which no longer touches prices.
     const byId = Object.fromEntries(
       buildModels(catalog as any, [], patchData as any).map((m) => [m.id, m]),
     );
