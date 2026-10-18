@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.37
+
+- Price Standard organizations' cache writes from `/v1/models`. `patch.json` pinned `cacheWrite` to the legacy rates (GLM 1.68, DeepSeek V4.1 Flash 0.09) from when Coral's rows omitted `cache_write_per_m`; Coral has reported it since 2026-10-08, so the override only overcharged Standard organizations, which pay no cache write (GLM 1.25 per written token, not 1.68). Legacy and Cache-optimized prices are unchanged.
+- Read the string price fields Coral's `/v1/models` contract names (`input: "1.25"`, `cache_write: "0.00"`) as well as `input_per_m`, so a key served that shape is priced from it rather than from the embedded catalog.
+
 ## 1.0.36
 
 - Add cache-optimized pricing on demand ([Coral-Bricks-AI/coralbricks-api#202](https://github.com/Coral-Bricks-AI/coralbricks-api/issues/202)). With `"cacheOptimized": true` every request carries `X-Coral-Pricing: cache-optimized`, which Coral bills on its Cache-optimized plan for organizations it has enabled and ignores otherwise. Toggle it with `ctrl+alt+c` (`"cacheOptimizedShortcut"` in `coralbricks.json` picks another key, `null` none), the new row in `/coralbricks-settings`, or `/coralbricks-settings cache-optimized [on|off|toggle]`. The footer shows `coral: cache-optimized` while it is on and a CoralBricks model is selected. When `/v1/models` lists `pricing_plans.cache_optimized` for the key, cost tracking uses those prices while the header is on, including for a model selected before the toggle.
