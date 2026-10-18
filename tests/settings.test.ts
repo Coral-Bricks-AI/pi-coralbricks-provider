@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { configPath, loadConfig, saveApi, saveConfig, registerSettingsCommand } from "../settings";
 
+const DEFAULTS = { api:"chat-completions", park:false, cacheOptimized:false, cacheOptimizedShortcut:"ctrl+alt+c" };
+
 let dir: string;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "coral-settings-"));
@@ -52,7 +54,7 @@ describe("configuration", () => {
     raw({ api:"responses", park:"yes" });
     expect(loadConfig().park).toBe(false);
     saveConfig({ park:true });
-    expect(loadConfig()).toEqual({ api:"responses", park:true });
+    expect(loadConfig()).toEqual({ ...DEFAULTS, api:"responses", park:true });
     saveApi("chat-completions");
     expect(JSON.parse(fs.readFileSync(configPath(), "utf8"))).toEqual({ api:"chat-completions", park:true });
   });
@@ -62,6 +64,20 @@ describe("configuration", () => {
     expect(loadConfig().api).toBe("chat-completions");
     expect(() => saveApi("responses")).toThrow();
     expect(fs.readFileSync(configPath(), "utf8")).toBe("broken");
+  });
+  it("reads cache-optimized only when it is literally true", () => {
+    expect(loadConfig().cacheOptimized).toBe(false);
+    raw({ cacheOptimized:"yes" });
+    expect(loadConfig().cacheOptimized).toBe(false);
+    raw({ cacheOptimized:true });
+    expect(loadConfig().cacheOptimized).toBe(true);
+  });
+  it.each([
+    [undefined, "ctrl+alt+c"], [42, "ctrl+alt+c"], ["  ", "ctrl+alt+c"],
+    [" alt+x ", "alt+x"], [null, null], [false, null],
+  ])("reads cacheOptimizedShortcut %j as %j", (value, expected) => {
+    raw(value === undefined ? {} : { cacheOptimizedShortcut:value });
+    expect(loadConfig().cacheOptimizedShortcut).toBe(expected);
   });
 });
 
@@ -73,23 +89,51 @@ describe("settings command", () => {
     await handler("", ctx);
     expect(ctx.ui.custom).not.toHaveBeenCalled();
     expect(loadConfig().api).toBe("responses");
-    expect(apply).toHaveBeenCalledWith({api:"responses",park:false});
+    expect(apply).toHaveBeenCalledWith({...DEFAULTS,api:"responses"});
   });
-  it("asks about parking after choosing Responses over RPC", async () => {
+  it("asks about parking after choosing Responses over RPC, then about cache-optimized", async () => {
     const { handler, apply } = command();
     const ctx = context();
-    ctx.ui.select.mockResolvedValueOnce("responses").mockResolvedValueOnce("on");
+    ctx.ui.select.mockResolvedValueOnce("responses").mockResolvedValueOnce("on").mockResolvedValueOnce("on");
     await handler("", ctx);
-    expect(ctx.ui.select).toHaveBeenCalledTimes(2);
-    expect(loadConfig()).toEqual({ api:"responses", park:true });
-    expect(apply).toHaveBeenLastCalledWith({api:"responses",park:true});
+    expect(ctx.ui.select).toHaveBeenCalledTimes(3);
+    expect(ctx.ui.select.mock.calls[2][0]).toContain("X-Coral-Pricing: cache-optimized");
+    expect(loadConfig()).toEqual({ ...DEFAULTS, api:"responses", park:true, cacheOptimized:true });
+    expect(apply).toHaveBeenLastCalledWith({...DEFAULTS,api:"responses",park:true,cacheOptimized:true});
   });
   it("does not ask about parking for Chat Completions", async () => {
     const { handler } = command();
     const ctx = context();
-    ctx.ui.select.mockResolvedValue("chat-completions");
+    ctx.ui.select.mockResolvedValueOnce("chat-completions").mockResolvedValueOnce(undefined);
     await handler("", ctx);
-    expect(ctx.ui.select).toHaveBeenCalledOnce();
+    expect(ctx.ui.select).toHaveBeenCalledTimes(2);
+    expect(ctx.ui.select.mock.calls[1][0]).toContain("X-Coral-Pricing");
+    expect(loadConfig().cacheOptimized).toBe(false);
+  });
+  it.each([
+    ["cache-optimized", [true, false]],
+    ["cache-optimized toggle", [true, false]],
+    ["Cache-Optimized ON", [true, true]],
+    ["cache-optimized off", [false, false]],
+  ] as const)("%s sets the header without a dialog", async (args, expected) => {
+    const { handler, apply } = command();
+    for (const on of expected) {
+      const ctx = context("json", false);
+      await handler(args, ctx);
+      expect(ctx.ui.select).not.toHaveBeenCalled();
+      expect(ctx.ui.custom).not.toHaveBeenCalled();
+      expect(loadConfig().cacheOptimized).toBe(on);
+      expect(apply).toHaveBeenLastCalledWith({...DEFAULTS,cacheOptimized:on});
+      expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining(`cache-optimized: ${on ? "on" : "off"}`), "info");
+    }
+  });
+  it("leaves cache-optimized unchanged when the toggle cannot save", async () => {
+    raw(null);
+    const { handler, apply } = command();
+    const ctx = context();
+    await handler("cache-optimized", ctx);
+    expect(apply).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("pricing header unchanged"), "error");
   });
   it("does nothing on cancel or without UI", async () => {
     const { handler, apply } = command();
@@ -150,13 +194,17 @@ describe("settings command", () => {
       component.handleInput("\u001b[B");
       component.handleInput("\r");
       expect(loadConfig().park).toBe(true);
+      component.handleInput("\u001b[B");
+      expect(component.render(80).join("\n")).toContain("ctrl+alt+c");
+      component.handleInput("\r");
+      expect(loadConfig().cacheOptimized).toBe(true);
       component.invalidate();
       component.handleInput("\u001b");
       expect(done).toHaveBeenCalled();
       expect(render).toHaveBeenCalled();
     });
     await handler("", ctx);
-    expect(apply).toHaveBeenCalledWith({api:"responses",park:false});
+    expect(apply).toHaveBeenCalledWith({...DEFAULTS,api:"responses"});
   });
 });
 
@@ -164,7 +212,7 @@ describe("provider registration", () => {
   async function setup() {
     vi.resetModules();
     const { default: extension } = await import("../index");
-    const pi = {registerProvider:vi.fn(),registerCommand:vi.fn(),on:vi.fn()};
+    const pi = {registerProvider:vi.fn(),registerCommand:vi.fn(),registerShortcut:vi.fn(),on:vi.fn()};
     extension(pi as any);
     // The native provider, viewed through the config-form fields these tests pinned.
     const latest = () => {
@@ -212,6 +260,59 @@ describe("provider registration", () => {
       fetch:async (_input:any, init:any) => { body = JSON.parse(init.body); return Response.json({error:{message:"test"}}, {status:400}); },
     }).result();
     expect(body.store).toBe(park);
+  });
+  it("registers the toggle shortcut from settings, or none when it is null", async () => {
+    let {pi} = await setup();
+    expect(pi.registerShortcut).toHaveBeenCalledOnce();
+    expect(pi.registerShortcut.mock.calls[0][0]).toBe("ctrl+alt+c");
+    saveConfig({ cacheOptimizedShortcut:"alt+shift+c" } as any);
+    ({pi} = await setup());
+    expect(pi.registerShortcut.mock.calls[0][0]).toBe("alt+shift+c");
+    saveConfig({ cacheOptimizedShortcut:null } as any);
+    ({pi} = await setup());
+    expect(pi.registerShortcut).not.toHaveBeenCalled();
+  });
+  it("toggles the header, prices and footer status from the shortcut", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({data:[{id:"glm-5.3-fast",context_length:1048576,
+      pricing:{input_per_m:1.25,cached_input_per_m:0.25,cache_write_per_m:0,output_per_m:4.4},
+      pricing_plans:{cache_optimized:{input_per_m:1.12,cached_input_per_m:0,cache_write_per_m:0.56,output_per_m:4.4}}}]})));
+    const {pi, latest} = await setup();
+    const on = (event:string) => pi.on.mock.calls.find(c => c[0] === event)![1];
+    const ui = {notify:vi.fn(), setStatus:vi.fn()};
+    await on("session_start")({}, {modelRegistry:{getApiKeyForProvider:async()=>"test-key"}, ui, model:{provider:"coralbricks"}});
+    await vi.waitFor(() => expect(latest().models.find((m:any)=>m.id === "glm-5.3-fast").cost.cacheRead).toBe(0.25));
+    expect(ui.setStatus).toHaveBeenLastCalledWith("coralbricks", undefined);
+    const glm = () => latest().models.find((m:any)=>m.id === "glm-5.3-fast");
+    const selected = {...glm(), provider:"coralbricks", baseUrl:latest().baseUrl};
+
+    const toggle = pi.registerShortcut.mock.calls[0][1].handler;
+    await toggle({mode:"tui", hasUI:true, ui});
+    expect(loadConfig().cacheOptimized).toBe(true);
+    expect(glm().cost).toEqual({input:1.12,output:4.4,cacheRead:0,cacheWrite:1.68});
+    expect(glm()).not.toHaveProperty("cacheOptimizedCost");
+    expect(ui.setStatus).toHaveBeenLastCalledWith("coralbricks", "coral: cache-optimized");
+
+    // The model pi already selected still carries Standard prices; the request is priced cache-optimized.
+    let headers = new Headers();
+    const result = await latest().streamSimple(selected, {messages:[{role:"user",content:"hi",timestamp:1}]}, {
+      apiKey:"test", maxRetries:0,
+      fetch:async (_input:any, init:any) => { headers = new Headers(init.headers); return new Response([
+        {id:"c",object:"chat.completion.chunk",created:0,model:"m",choices:[{index:0,delta:{role:"assistant",content:"Hi"},finish_reason:null}]},
+        {id:"c",object:"chat.completion.chunk",created:0,model:"m",choices:[{index:0,delta:{},finish_reason:"stop"}],usage:{prompt_tokens:1000000,completion_tokens:0,total_tokens:1000000}},
+      ].map(e => `data: ${JSON.stringify(e)}\n\n`).join(""), {headers:{"content-type":"text/event-stream"}}); },
+    }).result();
+    expect(headers.get("x-coral-pricing")).toBe("cache-optimized");
+    expect(result.usage.cost.input).toBeCloseTo(1.12);
+
+    on("model_select")({model:{provider:"other"}}, {ui});
+    expect(ui.setStatus).toHaveBeenLastCalledWith("coralbricks", undefined);
+    on("model_select")({model:{provider:"coralbricks"}}, {ui});
+    expect(ui.setStatus).toHaveBeenLastCalledWith("coralbricks", "coral: cache-optimized");
+
+    await toggle({mode:"tui", hasUI:true, ui});
+    expect(loadConfig().cacheOptimized).toBe(false);
+    expect(glm().cost.input).toBe(1.25);
+    expect(ui.setStatus).toHaveBeenLastCalledWith("coralbricks", undefined);
   });
   it("routes an already selected model through the new API without mutation", async () => {
     const {latest, handler} = await setup();

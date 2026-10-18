@@ -104,7 +104,7 @@ describe("native Responses stream", () => {
 });
 
 describe("session id", () => {
-  async function requestFor(api: string, options: any = {}) {
+  async function requestFor(api: string, options: any = {}, settings: any = {}) {
     let headers = new Headers();
     let body: any;
     const fetch = vi.fn(async (_input:any, init:any) => {
@@ -115,7 +115,7 @@ describe("session id", () => {
         {id:"c",object:"chat.completion.chunk",created:0,model:"m",choices:[{index:0,delta:{},finish_reason:"stop"}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}},
       ]);
     });
-    await streamCoral(model(api), {messages:[user]}, {apiKey:"k", fetch, maxRetries:0, sessionId:"pi-session-1", ...options} as any).result();
+    await streamCoral(model(api), {messages:[user]}, {apiKey:"k", fetch, maxRetries:0, sessionId:"pi-session-1", ...options} as any, settings).result();
     expect(fetch).toHaveBeenCalledOnce();
     return {headers, body};
   }
@@ -140,6 +140,20 @@ describe("session id", () => {
     expect(headers.get("x-coral-session")).toBeNull();
     expect(headers.get("x-session-affinity")).toBeNull();
     expect(body.prompt_cache_key).toBeUndefined();
+  });
+  it.each(["openai-completions", "openai-responses"])("sends X-Coral-Pricing on %s only when cache-optimized is on", async (api) => {
+    expect((await requestFor(api)).headers.get("x-coral-pricing")).toBeNull();
+    const {headers} = await requestFor(api, {}, {cacheOptimized:true});
+    expect(headers.get("x-coral-pricing")).toBe("cache-optimized");
+    expect(headers.get("x-coral-session")).toBe("pi-session-1");
+    expect((await requestFor(api, {sessionId: undefined}, {cacheOptimized:true})).headers.get("x-coral-pricing")).toBe("cache-optimized");
+  });
+  it("lets the caller's own X-Coral-Pricing win", async () => {
+    const {headers} = await requestFor("openai-completions", {headers:{"X-Coral-Pricing":"standard"}}, {cacheOptimized:true});
+    expect(headers.get("x-coral-pricing")).toBe("standard");
+  });
+  it("sends X-Coral-Pricing on parked Responses requests", async () => {
+    expect((await requestFor("openai-responses", {}, {park:true, cacheOptimized:true})).headers.get("x-coral-pricing")).toBe("cache-optimized");
   });
   it("keeps the session header but drops the cache key when caching is off", async () => {
     const {headers, body} = await requestFor("openai-completions", {cacheRetention: "none"});

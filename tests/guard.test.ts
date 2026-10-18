@@ -125,6 +125,18 @@ describe("claimRuntime", () => {
     expect(owner.owner()).toBeUndefined();
   });
 
+  it("hands each feature to the first copy that asks for it, whichever copy loaded first", async () => {
+    const scope = runtime();
+    const a = await claimIn(scope, fakeCopy("1.0.32"));
+    const b = await claimIn(scope, fakeCopy("1.0.40"));
+    expect(b.once("shortcut")).toBe(true);
+    expect(a.once("shortcut")).toBe(false);
+    expect(b.once("shortcut")).toBe(false);
+    expect(a.once("other")).toBe(true);
+    // A new runtime asks afresh.
+    expect((await claimIn(runtime(), fakeCopy("1.0.32"))).once("shortcut")).toBe(true);
+  });
+
   it("gives each copy its own scope on a host without an event bus", () => {
     const pi = { registerProvider: vi.fn() } as any;
     expect(claimRuntime(pi, fakeCopy("1.0.32")).owns()).toBe(true);
@@ -208,6 +220,20 @@ describe("two copies in one runtime", () => {
     expect(after.map(({ extensionPath }: any) => extensionPath)).toEqual(["<coralbricks 1.0.40>"]);
     expect(after[0].provider.getModels()[0].api).toBe("openai-responses");
     expect(newer.loaded.commands.size).toBe(0);
+  });
+
+  it("registers the cache-optimized shortcut once and toggles through the owning copy", async () => {
+    const scope = runtime();
+    const older = await loadCopy(scope, "1.0.32");
+    const newer = await loadCopy(scope, "1.0.40");
+    const shortcuts = [...older.loaded.shortcuts.keys(), ...newer.loaded.shortcuts.keys()];
+    expect(shortcuts).toEqual(["ctrl+alt+c"]);
+    const before = served(scope).count;
+    const ui = { notify: vi.fn(), setStatus: vi.fn() };
+    await older.loaded.shortcuts.get("ctrl+alt+c")!.handler({ mode: "tui", hasUI: true, ui } as any);
+    const after = scope.runtime.pendingNativeProviderRegistrations.slice(before);
+    expect(after.map(({ extensionPath }: any) => extensionPath)).toEqual(["<coralbricks 1.0.40>"]);
+    expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("cache-optimized: on"), "info");
   });
 
   it("lets a reloaded runtime register again", async () => {

@@ -31,7 +31,10 @@
  * Ownership only ever moves to a strictly newer version, and only at load
  * time, so it cannot flap, and only the owner fetches `/v1/models`. The first
  * copy registers `/coralbricks-settings` once and serves it through whichever
- * copy owns the scope. Ownership ends with the session (`session_shutdown`).
+ * copy owns the scope. A feature newer than the copy that loaded first (the
+ * cache-optimized shortcut) is registered by whichever copy asks `once()` for
+ * it first, so an older first copy cannot leave it out. Ownership ends with the
+ * session (`session_shutdown`).
  * Copies older than this protocol do not take part and keep registering.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -50,6 +53,8 @@ export interface CoralCopy {
 
 interface Scope {
   owner?: CoralCopy;
+  /** Features a copy already registered for this scope. Optional: older copies never set it. */
+  claimed?: Set<string>;
 }
 
 type Registry = WeakMap<object, Scope>;
@@ -61,6 +66,8 @@ export interface RuntimeClaim {
   readonly first: boolean;
   /** The copy that owns the runtime now, if any. */
   owner(): CoralCopy | undefined;
+  /** True for the first copy in the runtime to ask for `feature`, which then registers it. */
+  once(feature: string): boolean;
   /** End this copy's ownership (session shutdown). */
   release(): void;
 }
@@ -148,6 +155,12 @@ export function claimRuntime(pi: ExtensionAPI, copy: CoralCopy): RuntimeClaim {
     first,
     owns: () => current.owner === copy,
     owner: () => current.owner,
+    once: (feature) => {
+      current.claimed ??= new Set();
+      if (current.claimed.has(feature)) return false;
+      current.claimed.add(feature);
+      return true;
+    },
     release: () => {
       if (current.owner === copy) current.owner = undefined;
     },

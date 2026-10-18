@@ -17,6 +17,11 @@
  *      at a time (lock file next to the cache).
  *   3. patch.json + custom-models.json applied on top of whichever source won
  *
+ * Cache-optimized pricing: with `cacheOptimized` on (/coralbricks-settings, or
+ * the ctrl+alt+c shortcut), every request carries `X-Coral-Pricing:
+ * cache-optimized`, and models whose /v1/models row lists
+ * `pricing_plans.cache_optimized` are priced at it.
+ *
  * When several copies of this package load into one Pi runtime (a standalone
  * install plus a copy bundled in another package), only the newest registers
  * the provider and syncs models (guard.ts).
@@ -38,11 +43,12 @@
  * Then use /model to select from available models
  */
 
-import { getAgentDir, type ExtensionAPI, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { lazyStream, type Api, type Credential, type Model, type RefreshModelsContext } from "@earendil-works/pi-ai";
 import type { AssistantMessageEventStream, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { clampThinkingLevel, streamOpenAICompletions, streamOpenAIResponses } from "@earendil-works/pi-ai/compat";
-import { createSettingsCommand, loadConfig, SETTINGS_COMMAND } from "./settings";
+import { CACHE_OPTIMIZED_TOGGLE_ARGS, createSettingsCommand, loadConfig, PRICING_HEADER, SETTINGS_COMMAND } from "./settings";
 import { claimRuntime, type CoralCopy } from "./guard";
 import { park, planPark, withParkFallback, type ParkPlan } from "./park";
 import { coralApiKeyAuth, CORALBRICKS_ENV_VAR } from "./auth";
@@ -90,6 +96,12 @@ interface JsonModel {
   };
   /** Curation-only (patch.json): keep a served model out of the catalog. */
   hidden?: boolean;
+  /**
+   * The price of a request sent with `X-Coral-Pricing: cache-optimized`, from
+   * /v1/models `pricing_plans.cache_optimized`. Coral lists it only for a key whose
+   * organization is enabled for Cache-optimized; without it the header changes nothing.
+   */
+  cacheOptimizedCost?: JsonModel["cost"];
 }
 
 interface PatchEntry {
@@ -257,30 +269,38 @@ function baseCompat() {
   };
 }
 
+/** pi's cost for one of a /v1/models row's price lists (`pricing`, or a `pricing_plans` entry). */
+function toCost(pricing: any): JsonModel["cost"] {
+  return {
+    input: toNumber(pricing?.input_per_m),
+    output: toNumber(pricing?.output_per_m),
+    cacheRead: toNumber(pricing?.cached_input_per_m),
+    cacheWrite: writtenTokenCost(toNumber(pricing?.input_per_m), pricing?.cache_write_per_m),
+  };
+}
+
 /**
  * Transform a Coral /v1/models row. Coral reports per-million USD pricing
  * (input_per_m / output_per_m / cached_input_per_m — cached reads are $0 on
  * every model — and cache_write_per_m, the cache write ON TOP of input for a
  * prompt token written to the cache), context_length, and supports_image_input.
  * pi's cacheWrite is the full price of a written token: input + cache_write_per_m.
+ * An organization enabled for Cache-optimized also gets `pricing_plans.cache_optimized`
+ * with the same fields: the price of a request that sends X-Coral-Pricing.
  */
 function transformApiModel(apiModel: any): JsonModel | null {
   if (!apiModel?.id) return null;
-  const pricing = apiModel.pricing || {};
   const model: JsonModel = {
     id: apiModel.id,
     name: typeof apiModel.name === "string" && apiModel.name ? apiModel.name : displayName(apiModel.id),
     reasoning: false,
     input: apiModel.supports_image_input ? ["text", "image"] : ["text"],
-    cost: {
-      input: toNumber(pricing.input_per_m),
-      output: toNumber(pricing.output_per_m),
-      cacheRead: toNumber(pricing.cached_input_per_m),
-      cacheWrite: writtenTokenCost(toNumber(pricing.input_per_m), pricing.cache_write_per_m),
-    },
+    cost: toCost(apiModel.pricing),
     contextWindow: parseContextWindow(apiModel.context_length),
     maxTokens: DEFAULT_MAX_TOKENS[apiModel.id] ?? FALLBACK_MAX_TOKENS,
   };
+  const cacheOptimized = apiModel.pricing_plans?.cache_optimized;
+  if (cacheOptimized && typeof cacheOptimized === "object") model.cacheOptimizedCost = toCost(cacheOptimized);
   model.compat = baseCompat();
   return model;
 }
@@ -445,7 +465,7 @@ export function streamCoral(
   model: any,
   context: any,
   options?: SimpleStreamOptions,
-  settings: { park?: boolean } = {},
+  settings: { park?: boolean; cacheOptimized?: boolean } = {},
 ): AssistantMessageEventStream {
   const apiKey = options?.apiKey || cachedApiKey || "";
   if (!apiKey) {
@@ -467,9 +487,15 @@ export function streamCoral(
   // x-session-affinity on Chat Completions when a model opts in (forced below),
   // and omits prompt_cache_key there for every base URL but api.openai.com, so
   // send Coral's own header on both surfaces and the body key on Completions.
+  // Cache-optimized pricing is the X-Coral-Pricing header on the request; headers
+  // the caller passes still win over both.
   const sessionId = (streamOptions as any).sessionId as string | undefined;
-  const sessionHeaders = sessionId
-    ? { "x-coral-session": sessionId, ...((streamOptions as any).headers ?? {}) }
+  const coralHeaders: Record<string, string> = {
+    ...(sessionId ? { "x-coral-session": sessionId } : {}),
+    ...(settings.cacheOptimized ? { [PRICING_HEADER.name]: PRICING_HEADER.value } : {}),
+  };
+  const sessionHeaders = Object.keys(coralHeaders).length > 0
+    ? { ...coralHeaders, ...((streamOptions as any).headers ?? {}) }
     : (streamOptions as any).headers;
   const promptCacheKey = (streamOptions as any).cacheRetention === "none" ? undefined : clampPromptCacheKey(sessionId);
   const withPromptCacheKey = (params: any) => {
@@ -530,8 +556,15 @@ async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
  * registration below serves exactly these, so ids, pricing, thinking maps and
  * compat flags reach Pi unchanged.
  */
-function toProviderModels(models: JsonModel[], api: Api): Model<Api>[] {
-  return models.map((model) => ({ ...model, api, provider: PROVIDER_ID, baseUrl: BASE_URL, headers: undefined }) as unknown as Model<Api>);
+function toProviderModels(models: JsonModel[], api: Api, cacheOptimized = false): Model<Api>[] {
+  return models.map(({ cacheOptimizedCost, ...model }) => ({
+    ...model,
+    cost: cacheOptimized && cacheOptimizedCost ? cacheOptimizedCost : model.cost,
+    api,
+    provider: PROVIDER_ID,
+    baseUrl: BASE_URL,
+    headers: undefined,
+  }) as unknown as Model<Api>);
 }
 
 /** The key a refresh should fetch with: Pi's own resolution when a session exposed it. */
@@ -564,7 +597,8 @@ export default function (pi: ExtensionAPI) {
   let config = loadConfig();
   let currentModels = buildModels(loadStaleModels(embeddedModels), customModels, patches);
   const selectedApi = () => config.api === "responses" ? "openai-responses" : "openai-completions";
-  let providerModels = toProviderModels(currentModels, selectedApi());
+  const catalog = (models: JsonModel[]) => toProviderModels(models, selectedApi(), config.cacheOptimized);
+  let providerModels = catalog(currentModels);
 
   // The key the catalog was last revalidated with (null: not yet this process).
   // Pi refreshes catalogs on startup, on /model and after /login; only a changed
@@ -594,18 +628,21 @@ export default function (pi: ExtensionAPI) {
     await context.publish({
       update: () => {
         currentModels = next;
-        providerModels = toProviderModels(next, selectedApi());
+        providerModels = catalog(next);
       },
     });
   }
 
   function registerProvider() {
     if (!claim.owns()) return;
-    providerModels = toProviderModels(currentModels, selectedApi());
-    // An already-selected model may still carry the previous API. Snapshot
-    // the current selection per request, without mutating that model/history.
+    providerModels = catalog(currentModels);
+    // An already-selected model may still carry the previous API and prices.
+    // Snapshot the current selection per request, without mutating that model/history.
     const stream = (model: Model<any>, context: any, options?: any) =>
-      lazyStream(model, async () => streamCoral({ ...model, api: selectedApi() }, context, options, { park: config.park }));
+      lazyStream(model, async () => {
+        const cost = providerModels.find((m) => m.id === model.id)?.cost ?? model.cost;
+        return streamCoral({ ...model, api: selectedApi(), cost }, context, options, { park: config.park, cacheOptimized: config.cacheOptimized });
+      });
     // Native provider (pi-ai `Provider`): the same catalog and stream as the
     // config form, plus API-key auth with a `/login coralbricks` flow.
     pi.registerProvider({
@@ -620,9 +657,19 @@ export default function (pi: ExtensionAPI) {
     });
   }
   registerProvider();
+
+  // Footer status while cache-optimized is on and a CoralBricks model is selected.
+  let statusUi: ExtensionContext["ui"] | undefined;
+  let selectedProvider: string | undefined;
+  function showStatus() {
+    if (!claim.owns()) return;
+    statusUi?.setStatus(PROVIDER_ID, config.cacheOptimized && selectedProvider === PROVIDER_ID ? "coral: cache-optimized" : undefined);
+  }
+
   settingsCommand = createSettingsCommand(() => config, (next) => {
     config = next;
     registerProvider();
+    showStatus();
   });
   // One command per runtime, served by whichever copy owns it when invoked.
   if (claim.first) {
@@ -631,9 +678,27 @@ export default function (pi: ExtensionAPI) {
       handler: (args, ctx) => (claim.owner() ?? copy).settings(args, ctx),
     });
   }
+  // One shortcut per runtime too. Pi's keybindings.json does not cover extension
+  // shortcuts, so coralbricks.json's cacheOptimizedShortcut picks the key (null: none).
+  const shortcut = config.cacheOptimizedShortcut;
+  if (shortcut && typeof pi.registerShortcut === "function" && claim.once("cache-optimized-shortcut")) {
+    pi.registerShortcut(shortcut as KeyId, {
+      description: `Toggle CoralBricks cache-optimized pricing (${PRICING_HEADER.name})`,
+      handler: (ctx) => (claim.owner() ?? copy).settings(CACHE_OPTIMIZED_TOGGLE_ARGS, ctx),
+    });
+  }
+
+  pi.on("model_select", (event, ctx) => {
+    statusUi = ctx.ui;
+    selectedProvider = event.model?.provider;
+    showStatus();
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     if (!claim.owns()) return;
+    statusUi = ctx.ui;
+    selectedProvider = ctx.model?.provider;
+    showStatus();
     modelRegistry = ctx.modelRegistry;
     revalidateAbort?.abort();
     revalidateAbort = new AbortController();

@@ -27,6 +27,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
 - **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
+- **Cache-optimized pricing on demand** — toggle the `X-Coral-Pricing: cache-optimized` header with `ctrl+alt+c` or `/coralbricks-settings` (see [Cache-optimized pricing](#cache-optimized-pricing-cacheoptimized-true))
 - **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models`, hot-swapped at session start and after `/login`. Without a key it makes no network request and serves the cached or embedded catalog
 - **Quiet startup sync** — startup never waits on the network, and the catalog is refreshed at most hourly, by one pi process at a time, so `/new`, `pi -p` and fan-out child agents share one cache (see [Model Sync](#model-sync))
 - **Safe to install twice** — when a standalone install and a copy bundled in another Pi package (such as [pi-fabric](https://github.com/fabric-runtime/pi-fabric)) load together, only the newest copy registers the provider (see [Installed more than once](#installed-more-than-once))
@@ -116,8 +117,8 @@ Thinking levels attach to the model id with `:<level>` — e.g. `:low`, `:high`,
 
 ## Provider Settings
 
-Run `/coralbricks-settings` to choose the **API surface** and, for Responses,
-whether to **park turns**. The searchable,
+Run `/coralbricks-settings` to choose the **API surface**, whether to **park
+turns** (Responses only), and whether to request **cache-optimized pricing**. The searchable,
 bordered settings list matches pi's settings UI; GUI/RPC clients get a selection
 dialog. Changes are saved immediately and apply to the next request without a
 restart, including when a CoralBricks model is already selected.
@@ -126,7 +127,7 @@ Settings live at `~/.pi/agent/extensions/coralbricks.json` (or under
 `PI_CODING_AGENT_DIR` when set):
 
 ```json
-{ "api": "responses", "park": false }
+{ "api": "responses", "park": false, "cacheOptimized": false, "cacheOptimizedShortcut": "ctrl+alt+c" }
 ```
 
 - **`chat-completions`** (default): uses `/v1/chat/completions`; existing behavior
@@ -175,6 +176,38 @@ without silently falling back to a different API.
 Missing, invalid, or unreadable settings default to Chat Completions. Unknown
 JSON fields are preserved when toggling; malformed files must be fixed before
 saving. If editing the file manually, run `/reload` to apply it.
+
+### Cache-optimized pricing (`"cacheOptimized": true`)
+
+With it on, every request carries `X-Coral-Pricing: cache-optimized`, on Chat
+Completions and Responses, parked or not. Coral then bills the request on its
+[Cache-optimized plan](https://www.coralbricks.ai/pricing): each new token pays
+input plus a one-time cache write, and cached reads are $0. That suits a session
+whose cache has to outlive long gaps, such as slow tool calls or many
+sub-agents branching off one context.
+
+The header only counts once CoralBricks has enabled Cache-optimized for your
+organization. Until then it is ignored and the request is served and billed
+Standard, never refused. Organizations that kept the earlier pricing ignore it
+too. Run your workload on Standard first; the
+[pricing page](https://www.coralbricks.ai/pricing) explains how to ask for
+Cache-optimized.
+
+Turn it on or off whenever you need to:
+
+- **`ctrl+alt+c`** toggles it from the editor. Pi's `keybindings.json` does not
+  cover extension shortcuts, so set `"cacheOptimizedShortcut"` in
+  `coralbricks.json` to use another key, or `null` for none, then `/reload`.
+- **`/coralbricks-settings`** has a *Cache-optimized pricing* row; GUI/RPC
+  clients are asked after the API surface.
+- **`/coralbricks-settings cache-optimized [on|off|toggle]`** sets it without a
+  dialog, including from RPC and scripts.
+
+The change is saved and applies from the next request. While it is on and a
+CoralBricks model is selected, the footer shows `coral: cache-optimized`. When
+`/v1/models` lists Cache-optimized prices for your key (`pricing_plans`, shown
+only to enabled organizations), pi's cost tracking uses them while the header
+is on, and Standard prices while it is off.
 
 ## Authentication
 

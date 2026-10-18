@@ -66,6 +66,21 @@ describe("transformApiModel (/v1/models rows)", () => {
     expect(unknown.contextWindow).toBe(131072);
   });
 
+  it("keeps the cache-optimized price list an enabled organization's key is shown", () => {
+    // A Standard organization enabled for Cache-optimized (coralbricks-api contracts/SCHEMA.md).
+    const glm = { ...v1DeepSeekRow, id: "glm-5.3-fast",
+      pricing: { cache_write_per_m: 0, cached_input_per_m: 0.25, input_per_m: 1.25, output_per_m: 4.4 },
+      pricing_plans: {
+        standard: { cache_write_per_m: 0, cached_input_per_m: 0.25, input_per_m: 1.25, output_per_m: 4.4 },
+        cache_optimized: { cache_write_per_m: 0.56, cached_input_per_m: 0, input_per_m: 1.12, output_per_m: 4.4, header: "X-Coral-Pricing: cache-optimized" },
+      } };
+    const m = transformApiModel(glm)!;
+    expect(m.cost).toEqual({ input: 1.25, output: 4.4, cacheRead: 0.25, cacheWrite: 1.25 });
+    expect(m.cacheOptimizedCost).toEqual({ input: 1.12, output: 4.4, cacheRead: 0, cacheWrite: 1.68 });
+    expect(transformApiModel({ ...v1DeepSeekRow, pricing_plans: null })!.cacheOptimizedCost).toBeUndefined();
+    expect(transformApiModel(v1DeepSeekRow)!.cacheOptimizedCost).toBeUndefined();
+  });
+
   it("returns null for rows without an id", () => {
     expect(transformApiModel(null)).toBeNull();
     expect(transformApiModel({})).toBeNull();
