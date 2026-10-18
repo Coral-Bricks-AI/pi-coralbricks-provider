@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.36
+
+- Add cache-optimized pricing on demand ([Coral-Bricks-AI/coralbricks-api#202](https://github.com/Coral-Bricks-AI/coralbricks-api/issues/202)). With `"cacheOptimized": true` every request carries `X-Coral-Pricing: cache-optimized`, which Coral bills on its Cache-optimized plan for organizations it has enabled and ignores otherwise. Toggle it with `ctrl+alt+c` (`"cacheOptimizedShortcut"` in `coralbricks.json` picks another key, `null` none), the new row in `/coralbricks-settings`, or `/coralbricks-settings cache-optimized [on|off|toggle]`. The footer shows `coral: cache-optimized` while it is on and a CoralBricks model is selected. When `/v1/models` lists `pricing_plans.cache_optimized` for the key, cost tracking uses those prices while the header is on, including for a model selected before the toggle.
+- The copy that first asks registers the shortcut (`RuntimeClaim.once`), so a bundled copy older than this release that loaded first does not leave it out. The registry key, event-bus channel and `CoralCopy` shape are unchanged: the shortcut runs through `CoralCopy.settings`.
+
 ## 1.0.35
 
 - Pin Pi SDK development dependencies to 1.3.0 while retaining wildcard host peers; verify real manifest loading, lifecycle and native/bundled Pi hosts offline.
