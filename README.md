@@ -40,7 +40,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 Install directly from GitHub:
 
 ```bash
-pi install https://github.com/monotykamary/pi-coralbricks-provider
+pi install https://github.com/Coral-Bricks-AI/pi-coralbricks-provider
 ```
 
 or from npm:
@@ -65,7 +65,7 @@ pi
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/monotykamary/pi-coralbricks-provider.git
+   git clone https://github.com/Coral-Bricks-AI/pi-coralbricks-provider.git
    cd pi-coralbricks-provider
    bun install
    ```

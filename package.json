@@ -3,13 +3,13 @@
   "version": "1.0.38",
   "description": "CoralBricks provider extension for pi - Access GLM 5.3 and DeepSeek V4.1 Flash (FP4 variants included) through the Coral Inference API",
   "author": "monotykamary",
-  "homepage": "https://github.com/monotykamary/pi-coralbricks-provider#readme",
+  "homepage": "https://github.com/Coral-Bricks-AI/pi-coralbricks-provider#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/monotykamary/pi-coralbricks-provider.git"
+    "url": "git+https://github.com/Coral-Bricks-AI/pi-coralbricks-provider.git"
   },
   "bugs": {
-    "url": "https://github.com/monotykamary/pi-coralbricks-provider/issues"
+    "url": "https://github.com/Coral-Bricks-AI/pi-coralbricks-provider/issues"
   },
   "type": "module",
   "main": "index.ts",

@@ -11,7 +11,7 @@ name: Publish
 #
 # Auth is npm Trusted Publishing (OIDC): npm trusts this file, so no npm token
 # is stored anywhere. Registered once with
-#   npm trust github pi-coralbricks-provider --repo monotykamary/pi-coralbricks-provider --file publish.yml --allow-publish
+#   npm trust github pi-coralbricks-provider --repo Coral-Bricks-AI/pi-coralbricks-provider --file publish.yml --allow-publish
 #
 # Bun installs and packs exactly as `bun publish` does; npm uploads the
 # tarballs because only the npm CLI speaks trusted publishing.
