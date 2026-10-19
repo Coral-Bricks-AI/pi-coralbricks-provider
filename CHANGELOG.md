@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.38
+
+- Drop GLM 5.3 (`glm-5.3-fast`). Coral retired it on 2026-10-19 (404 `model_retired`), so the catalog sync removed it without a grace period, and its `patch.json` entry goes with it. DeepSeek V4.1 Flash (`deepseek-v4.1-flash-fast`) is the only model Coral serves. The zai thinking format stays supported for GLM models.
+- Move the repository to [Coral-Bricks-AI/pi-coralbricks-provider](https://github.com/Coral-Bricks-AI/pi-coralbricks-provider). GitHub redirects the old `monotykamary/pi-coralbricks-provider` URLs, so existing `pi install` links keep working.
+
 ## 1.0.37
 
 - Price Standard organizations' cache writes from `/v1/models`. `patch.json` pinned `cacheWrite` to the legacy rates (GLM 1.68, DeepSeek V4.1 Flash 0.09) from when Coral's rows omitted `cache_write_per_m`; Coral has reported it since 2026-10-08, so the override only overcharged Standard organizations, which pay no cache write (GLM 1.25 per written token, not 1.68). Legacy and Cache-optimized prices are unchanged.

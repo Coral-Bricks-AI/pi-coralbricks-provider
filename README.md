@@ -2,7 +2,7 @@
 
 # 🪸 pi-coralbricks-provider
 
-**GLM 5.3 & DeepSeek V4.1 Flash through [Coral Bricks](https://www.coralbricks.ai)**
+**DeepSeek V4.1 Flash through [Coral Bricks](https://www.coralbricks.ai)**
 
 _A [pi](https://github.com/earendil-works/pi-coding-agent) provider extension for Coral's OpenAI-compatible inference gateway — up to **1M context** on open models._
 
@@ -22,8 +22,8 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 
 ## Features
 
-- **2 reasoning models** from Coral's live catalog — GLM 5.3 and DeepSeek V4.1 Flash
-- **1M token context** on GLM and DeepSeek, with vision (image input) on DeepSeek V4.1 Flash
+- **DeepSeek V4.1 Flash** from Coral's live catalog, with reasoning
+- **1M token context** with vision (image input)
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
 - **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
@@ -103,7 +103,7 @@ The copies find each other through a process-global registry (`Symbol.for("pi-co
 After loading the extension, use the `/model` command in pi to select your preferred model:
 
 ```
-/model coralbricks glm-5.3-fast
+/model coralbricks deepseek-v4.1-flash-fast
 ```
 
 Or start pi directly with a Coral model:
@@ -286,7 +286,7 @@ Reproduce:
 CORALBRICKS_API_KEY=cb_... node ../synbad/dist/source/index.js eval \
   --env-var CORALBRICKS_API_KEY \
   --base-url https://inference.coralbricks.ai/v1 \
-  --model glm-5.3-fast --count 1 --reasoning-effort high
+  --model deepseek-v4.1-flash-fast --count 1 --reasoning-effort high
 ```
 
 ## Model Sync

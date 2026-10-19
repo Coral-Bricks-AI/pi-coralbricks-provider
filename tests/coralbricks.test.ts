@@ -30,6 +30,27 @@ const v1DeepSeekRow = {
   supports_tools: true,
 };
 
+// Coral retired GLM 5.3 (glm-5.3-fast) on 2026-10-19, so it is no longer in
+// models.json or patch.json. Its last curated definition keeps the zai family
+// (thinking: {type}) covered.
+const glm53Fixture = {
+  id: "glm-5.3-fast",
+  name: "GLM 5.3",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 1.12, output: 4.4, cacheRead: 0, cacheWrite: 1.68 },
+  contextWindow: 1048576,
+  maxTokens: 131072,
+  thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
+  compat: {
+    supportsDeveloperRole: false,
+    supportsStore: false,
+    maxTokensField: "max_tokens",
+    supportsReasoningEffort: true,
+    thinkingFormat: "zai",
+  },
+};
+
 describe("transformApiModel (/v1/models rows)", () => {
   it("maps pricing, context, and image support", () => {
     const m = transformApiModel(v1DeepSeekRow)!;
@@ -117,12 +138,8 @@ describe("parseContextWindow", () => {
 });
 
 describe("applyPatch", () => {
-  // models.json holds only the bare API row, so apply patch.json's entry for
-  // the live slug first — applyPatch's merge/strip behavior needs curated input.
-  const base = applyPatch(
-    modelsData.find((m) => m.id === "glm-5.3-fast")!,
-    (patchData as any)["glm-5.3-fast"],
-  );
+  // applyPatch's merge/strip behavior needs curated zai input.
+  const base = glm53Fixture as any;
   expect(base.reasoning).toBe(true);
   expect(base.compat?.thinkingFormat).toBe("zai");
 
@@ -149,10 +166,10 @@ describe("applyPatch", () => {
 
 describe("buildModels pipeline", () => {
   it("applies patch.json on top of base models", () => {
-    const patch = { "glm-5.3-fast": { name: "GLM 5.3 (patched)" } };
+    const patch = { "deepseek-v4.1-flash-fast": { name: "DeepSeek V4.1 Flash (patched)" } };
     const models = buildModels(modelsData as any, [], patch);
-    const glm = models.find((m) => m.id === "glm-5.3-fast");
-    expect(glm?.name).toBe("GLM 5.3 (patched)");
+    const deepseek = models.find((m) => m.id === "deepseek-v4.1-flash-fast");
+    expect(deepseek?.name).toBe("DeepSeek V4.1 Flash (patched)");
   });
 
   it("ignores patch entries for unknown ids", () => {
@@ -176,32 +193,32 @@ describe("mergeWithEmbedded (live vs curated)", () => {
   it("keeps curated compat/thinking over live rows while live cost wins", () => {
     const live = transformApiModel({
       ...v1DeepSeekRow,
-      id: "glm-5.3-fast",
+      id: "deepseek-v4.1-flash-fast",
       supports_image_input: false,
       pricing: { cache_write_per_m: 2, cached_input_per_m: 0, input_per_m: 5, output_per_m: 20 },
     })!;
     // Curated reasoning/compat lives in patch.json, applied after the merge by
     // buildModels; mergeWithEmbedded only proves the embedded curation wins here.
     const merged = mergeWithEmbedded([live], modelsData as any);
-    const glm = merged.find((m) => m.id === "glm-5.3-fast")!;
+    const deepseek = merged.find((m) => m.id === "deepseek-v4.1-flash-fast")!;
     // cache_write_per_m (2) is on top of input (5): a written token costs 7.
-    expect(glm.cost).toEqual({ input: 5, output: 20, cacheRead: 0, cacheWrite: 7 });
-    expect(glm.input).toEqual(["text"]);
+    expect(deepseek.cost).toEqual({ input: 5, output: 20, cacheRead: 0, cacheWrite: 7 });
+    expect(deepseek.input).toEqual(["text", "image"]);
   });
 
   it("keeps the curated cache-write rate when a live row omits cache_write_per_m", () => {
     const { cache_write_per_m: _omitted, ...pricing } = v1DeepSeekRow.pricing;
-    const live = transformApiModel({ ...v1DeepSeekRow, id: "glm-5.3-fast", pricing: { ...pricing, input_per_m: 1.12, output_per_m: 4.4 } })!;
+    const live = transformApiModel({ ...v1DeepSeekRow, id: "deepseek-v4.1-flash-fast", pricing: { ...pricing, input_per_m: 0.01, output_per_m: 1.2 } })!;
     expect(live.cost.cacheWrite).toBe(0);
     // The embedded row (models.json, synced from /v1/models) supplies it.
     const merged = buildModels(mergeWithEmbedded([live], modelsData as any), [], patchData as any);
-    expect(merged.find((m) => m.id === "glm-5.3-fast")!.cost.cacheWrite).toBe(1.68);
+    expect(merged.find((m) => m.id === "deepseek-v4.1-flash-fast")!.cost.cacheWrite).toBe(0.09);
   });
 
   it("appends embedded-only models (delisted from live)", () => {
     const live = [transformApiModel({ id: "brand-new-model", pricing: { input_per_m: 1, output_per_m: 2 } })!];
     const merged = mergeWithEmbedded(live, modelsData as any);
-    expect(merged.some((m) => m.id === "glm-5.3-fast")).toBe(true);
+    expect(merged.some((m) => m.id === "deepseek-v4.1-flash-fast")).toBe(true);
     expect(merged.some((m) => m.id === "brand-new-model")).toBe(true);
   });
 });
@@ -252,11 +269,12 @@ describe("embedded model catalog invariants", () => {
 
   it("offers the canonical -fast slugs", () => {
     // models.json mirrors the per-key /v1/models set. Coral stopped serving the
-    // hidden -fp4 twins on 2026-10-12, so only the -fast slugs remain…
-    expect(models.map((m) => m.id).sort()).toEqual(["deepseek-v4.1-flash-fast", "glm-5.3-fast"]);
+    // hidden -fp4 twins on 2026-10-12 and retired glm-5.3-fast on 2026-10-19,
+    // so only the DeepSeek -fast slug remains…
+    expect(models.map((m) => m.id).sort()).toEqual(["deepseek-v4.1-flash-fast"]);
     // …and the provider catalog (what pi's /model lists) is exactly that.
     const effective = buildModels(models as any, customModelsData as any, patchData as any);
-    expect(effective.map((m) => m.id)).toEqual(["deepseek-v4.1-flash-fast", "glm-5.3-fast"]);
+    expect(effective.map((m) => m.id)).toEqual(["deepseek-v4.1-flash-fast"]);
     expect(effective.every((m) => (m as { hidden?: boolean }).hidden === undefined)).toBe(true);
   });
 
@@ -273,14 +291,6 @@ describe("embedded model catalog invariants", () => {
         thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
         compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
         cacheWrite: 0.09,
-      },
-      "glm-5.3-fast": {
-        reasoning: true,
-        input: ["text"],
-        maxTokens: 131072,
-        thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
-        compat: { supportsReasoningEffort: true, thinkingFormat: "zai" },
-        cacheWrite: 1.68,
       },
     } as const;
     const effective = buildModels(models as any, [], patchData as any);
@@ -326,8 +336,6 @@ describe("embedded model catalog invariants", () => {
     // glm-5.2-fp4 is delisted; it is present only during its grace window.
     const glm52 = byId["glm-5.2-fp4"];
     if (glm52) expect(glm52.cost).toMatchObject({ input: 1.12, output: 4.4 });
-    // https://www.coralbricks.ai/pricing, 2026-09-22 (slugs renamed -fp4 → -fast, 2026-10)
-    expect(byId["glm-5.3-fast"].cost).toMatchObject({ input: 1.12, output: 4.4, cacheWrite: 1.68 });
     // 2026-10-08: DeepSeek $0.01 input + $0.08 cache write on top = $0.09 per written token.
     expect(byId["deepseek-v4.1-flash-fast"].cost).toMatchObject({ input: 0.01, output: 1.2, cacheWrite: 0.09 });
   });
@@ -344,8 +352,8 @@ describe("embedded model catalog invariants", () => {
   });
 
   it("maps thinking levels per upstream model family", () => {
-    // GLM 5.2 is delisted and embedded only during its grace window, so inject
-    // its last-known definition to keep the family mapping covered permanently.
+    // GLM 5.2 and 5.3 are retired, so inject their last-known definitions to
+    // keep the family mapping covered permanently.
     const glm52Fixture = {
       id: "glm-5.2-fp4",
       name: "GLM 5.2 FP4",
@@ -363,7 +371,7 @@ describe("embedded model catalog invariants", () => {
         thinkingFormat: "zai",
       },
     };
-    const effective = buildModels([...modelsData, glm52Fixture] as any, customModelsData as any, patchData as any);
+    const effective = buildModels([...modelsData, glm52Fixture, glm53Fixture] as any, customModelsData as any, patchData as any);
     const byId = Object.fromEntries(effective.map((m) => [m.id, m]));
     // GLM 5.2: zai format, off→disabled + high/max efforts
     expect(byId["glm-5.2-fp4"].compat?.thinkingFormat).toBe("zai");
@@ -381,7 +389,6 @@ describe("embedded model catalog invariants", () => {
     // The -fast API rows omit supports_image_input, so patch.json supplies it.
     const byId = Object.fromEntries(buildModels(models as any, [], patchData as any).map((m) => [m.id, m]));
     expect(byId["deepseek-v4.1-flash-fast"].input).toContain("image");
-    expect(byId["glm-5.3-fast"].input).toEqual(["text"]);
   });
 
   it("curates every live model via patch.json, and nothing else", () => {

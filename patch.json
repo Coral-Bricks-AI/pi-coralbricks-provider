@@ -4,11 +4,5 @@
     "input": ["text", "image"],
     "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max" },
     "compat": { "supportsReasoningEffort": true, "thinkingFormat": "openai" }
-  },
-  "glm-5.3-fast": {
-    "reasoning": true,
-    "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max" },
-    "maxTokens": 131072,
-    "compat": { "supportsReasoningEffort": true, "thinkingFormat": "zai" }
   }
 }

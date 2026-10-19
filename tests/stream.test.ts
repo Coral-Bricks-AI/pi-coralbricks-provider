@@ -86,7 +86,9 @@ describe("native Responses stream", () => {
     expect(JSON.stringify(p.payload.input)).toContain("Earlier reply");
   });
   it("keeps Chat Completions routing and GLM off semantics unchanged", async () => {
-    const p = await probe(model("openai-completions","glm-5.3-fast"), undefined, {reasoning:"off"});
+    // GLM 5.3 is retired; a zai-format model stands in for the family.
+    const glm = {...model("openai-completions"), id:"glm-5.3-fast", compat:{...model().compat, thinkingFormat:"zai"}};
+    const p = await probe(glm as any, undefined, {reasoning:"off"});
     expect(p.url).toBe(`${BASE_URL}/chat/completions`);
     expect(p.payload).toMatchObject({thinking:{type:"disabled"}});
     expect(p.payload.input).toBeUndefined();

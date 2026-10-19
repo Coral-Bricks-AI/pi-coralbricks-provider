@@ -79,9 +79,9 @@ describe("Responses parking", () => {
   });
 
   it("replays in full after a model switch", async () => {
-    const [a, b] = catalog.filter(m => m.reasoning).map(m => m.id);
-    const first = await turn([system, user("Hello")], text("r1"), {m: model(a)});
-    const next = await turn([system, user("Hello"), first.result, user("Again", 2)], text("r2"), {m: model(b)});
+    // The catalog may hold a single model, so switch to a copy under another id.
+    const first = await turn([system, user("Hello")], text("r1"), {m: model()});
+    const next = await turn([system, user("Hello"), first.result, user("Again", 2)], text("r2"), {m: {...model(), id: "other-model"}});
     expect(next.payload.previous_response_id).toBeUndefined();
   });
 
