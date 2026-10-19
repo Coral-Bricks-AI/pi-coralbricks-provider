@@ -20,26 +20,5 @@
       "supportsStore": false,
       "maxTokensField": "max_tokens"
     }
-  },
-  {
-    "id": "glm-5.3-fast",
-    "name": "GLM 5.3",
-    "reasoning": false,
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 1.12,
-      "output": 4.4,
-      "cacheRead": 0,
-      "cacheWrite": 1.68
-    },
-    "contextWindow": 1048576,
-    "maxTokens": 32768,
-    "compat": {
-      "supportsDeveloperRole": false,
-      "supportsStore": false,
-      "maxTokensField": "max_tokens"
-    }
   }
 ]
