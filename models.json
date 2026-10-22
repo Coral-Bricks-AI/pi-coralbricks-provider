@@ -8,10 +8,10 @@
       "image"
     ],
     "cost": {
-      "input": 0.01,
+      "input": 0.25,
       "output": 1.2,
-      "cacheRead": 0,
-      "cacheWrite": 0.09
+      "cacheRead": 0.005,
+      "cacheWrite": 0.25
     },
     "contextWindow": 1048576,
     "maxTokens": 32768,

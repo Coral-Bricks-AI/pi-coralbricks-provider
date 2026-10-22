@@ -94,7 +94,7 @@ The copies find each other through a process-global registry (`Symbol.for("pi-co
 
 | Model | Context | Vision | Reasoning | Input $/M | Cache Read $/M | Cache Write $/M | Output $/M |
 |-------|---------|--------|-----------|-----------|-----------------|------------------|------------|
-| DeepSeek V4.1 Flash | 1.0M | ✅ | ✅ | $0.01 | — | $0.09 | $1.20 |
+| DeepSeek V4.1 Flash | 1.0M | ✅ | ✅ | $0.25 | $0.01 | $0.25 | $1.20 |
 
 *Costs are per million tokens. Cache Read shows — because Coral bills cached input at **$0** on every model. Prompt tokens Coral has not cached yet are billed once at the Cache Write rate, in place of the Input rate. Prices subject to change — check [Coral's live catalog](https://www.coralbricks.ai/api/public/models).*
 
