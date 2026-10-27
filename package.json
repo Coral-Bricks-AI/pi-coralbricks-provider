@@ -1,6 +1,6 @@
 {
   "name": "pi-coralbricks-provider",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "CoralBricks provider extension for pi - Access DeepSeek V4.1 Flash through the Coral Inference API",
   "author": "monotykamary",
   "homepage": "https://github.com/Coral-Bricks-AI/pi-coralbricks-provider#readme",
