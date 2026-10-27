@@ -1,5 +1,27 @@
 [
   {
+    "id": "deepseek-v4.1-flash",
+    "name": "Deepseek V4.1 Flash",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.19,
+      "output": 0.6,
+      "cacheRead": 0.008,
+      "cacheWrite": 0.19
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 32768,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
+      "maxTokensField": "max_tokens"
+    }
+  },
+  {
     "id": "deepseek-v4.1-flash-fast",
     "name": "DeepSeek V4.1 Flash",
     "reasoning": false,
@@ -8,10 +30,10 @@
       "image"
     ],
     "cost": {
-      "input": 0.25,
-      "output": 1.2,
-      "cacheRead": 0.005,
-      "cacheWrite": 0.25
+      "input": 0.45,
+      "output": 1.8,
+      "cacheRead": 0.009,
+      "cacheWrite": 0.45
     },
     "contextWindow": 1048576,
     "maxTokens": 32768,
