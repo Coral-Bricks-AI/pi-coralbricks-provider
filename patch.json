@@ -1,5 +1,13 @@
 {
+  "deepseek-v4.1-flash": {
+    "name": "DeepSeek V4.1 Flash Standard",
+    "reasoning": true,
+    "input": ["text", "image"],
+    "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max" },
+    "compat": { "supportsReasoningEffort": true, "thinkingFormat": "openai" }
+  },
   "deepseek-v4.1-flash-fast": {
+    "name": "DeepSeek V4.1 Flash Fast",
     "reasoning": true,
     "input": ["text", "image"],
     "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max" },

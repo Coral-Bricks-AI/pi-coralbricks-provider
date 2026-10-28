@@ -9,10 +9,15 @@
  * Sources, in order:
  * 1. Authenticated https://inference.coralbricks.ai/v1/models — the authoritative
  *    per-key enabled set, with per-million USD pricing (input_per_m / output_per_m /
- *    cached_input_per_m — cached reads are $0), context_length, supports_image_input.
+ *    cached_input_per_m), context_length, supports_image_input. These are the key's
+ *    own rates: an organization can hold custom pricing.
  * 2. Unauthenticated public catalog https://www.coralbricks.ai/api/public/models —
  *    same control-plane data without a key (contextWindow like "1M", inputPerM,
- *    outputPerM). Used when no key is configured or /v1/models fails.
+ *    outputPerM, cacheReadPerM). Used when no key is configured or /v1/models fails.
+ *
+ * models.json carries the rates used for cost tracking. The README table is
+ * rendered from the PUBLIC list prices instead, so it matches the page it links
+ * to; your key's /v1/models rates replace them at runtime.
  *
  * The catalog is a subset: it lists each model's canonical slug, not every
  * variant enabled for a key, so a catalog run only ever adds or keeps models —
@@ -230,6 +235,43 @@ async function fetchPublicCatalog() {
   return models;
 }
 
+/**
+ * Public list prices per slug, in models.json cost shape.
+ *
+ * /v1/models prices belong to the key that fetched them — an organization can
+ * hold custom rates — so the README renders the public list instead, matching
+ * the pricing page it links to. Null when the catalog is unreachable; the
+ * README then keeps the rates in models.json.
+ */
+async function fetchPublicListPricing() {
+  try {
+    const prices = new Map();
+    for (const entry of await fetchPublicCatalog()) {
+      if (!entry || typeof entry.slug !== 'string') continue;
+      prices.set(entry.slug, {
+        input: toNumber(entry.inputPerM),
+        output: toNumber(entry.outputPerM),
+        cacheRead: toNumber(entry.cacheReadPerM),
+        cacheWrite: writtenTokenCost(toNumber(entry.inputPerM), entry.cacheWritePerM),
+      });
+    }
+    return prices;
+  } catch (error) {
+    console.warn(`⚠ Public catalog unavailable (${error.message}); README keeps models.json prices`);
+    return null;
+  }
+}
+
+/** Overlay public list prices on the README model list (slugs the list omits keep models.json rates). */
+function applyListPricing(models, prices) {
+  if (!prices) return models;
+  for (const model of models) {
+    const rate = prices.get(model.id);
+    if (rate) model.cost = { ...rate };
+  }
+  return models;
+}
+
 async function fetchModels(apiKey) {
   if (apiKey) {
     try {
@@ -320,6 +362,7 @@ function transformCatalogModel(entry, existingModelsMap) {
     if (contextWindow) existing.contextWindow = contextWindow;
     if (typeof entry.inputPerM === 'number') existing.cost.input = entry.inputPerM;
     if (typeof entry.outputPerM === 'number') existing.cost.output = entry.outputPerM;
+    if (typeof entry.cacheReadPerM === 'number') existing.cost.cacheRead = entry.cacheReadPerM;
     if (typeof entry.cacheWritePerM === 'number') {
       existing.cost.cacheWrite = writtenTokenCost(existing.cost.input, entry.cacheWritePerM);
     }
@@ -334,7 +377,7 @@ function transformCatalogModel(entry, existingModelsMap) {
     cost: {
       input: toNumber(entry.inputPerM),
       output: toNumber(entry.outputPerM),
-      cacheRead: 0,
+      cacheRead: toNumber(entry.cacheReadPerM),
       cacheWrite: writtenTokenCost(toNumber(entry.inputPerM), entry.cacheWritePerM),
     },
     contextWindow,
@@ -430,7 +473,8 @@ function formatContext(n) {
 
 function formatCost(cost) {
   if (cost === 0 || cost === null || cost === undefined) return '—';
-  return `$${cost.toFixed(2)}`;
+  // Two decimals everywhere Coral prices in cents; three for sub-cent cache reads ($0.008/M).
+  return `$${cost >= 0.01 ? cost.toFixed(2) : cost.toFixed(3)}`;
 }
 
 function generateReadmeTable(models) {
@@ -595,6 +639,7 @@ async function main() {
       const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
       const readmeBase = Array.isArray(baseModels) ? baseModels : [];
       const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);
+      applyListPricing(readmeModels, await fetchPublicListPricing());
       readmeModels.sort((a, b) => a.name.localeCompare(b.name));
       updateReadme(readmeModels);
       console.log('✓ Regenerated README.md from local model data');
@@ -637,9 +682,11 @@ async function main() {
 
     // Build the README model list: base → patch → custom. Grace-period models stay
     // servable at runtime (index.ts appends them) but are not listed as available.
+    // Prices come from the public list, not the key's /v1/models rates.
     const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
     const readmeBase = models;
     const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);
+    applyListPricing(readmeModels, await fetchPublicListPricing());
     readmeModels.sort((a, b) => a.name.localeCompare(b.name));
 
     // Update README

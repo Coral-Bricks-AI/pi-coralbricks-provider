@@ -26,7 +26,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **1M token context** with vision (image input)
 - **OpenAI-compatible API** — standard `/v1/chat/completions`, streaming, and tool calling
 - **Per-family thinking levels** — zai-style `thinking` control for GLM (including a *real* off switch), `reasoning_effort` for DeepSeek V4.1 Flash
-- **Accurate cost tracking** — input, cache-write and output rates mirror Coral's [published pricing](https://www.coralbricks.ai/pricing), and cached reads are **$0 on every model**
+- **Accurate cost tracking** — input, cache-read, cache-write and output rates come from `/v1/models` for your key and refresh at session start, so cost follows Coral's [pricing](https://www.coralbricks.ai/pricing) without stale hard-coded numbers
 - **Cache-optimized pricing on demand** — toggle the `X-Coral-Pricing: cache-optimized` header with `ctrl+alt+c` or `/coralbricks-settings` (see [Cache-optimized pricing](#cache-optimized-pricing-cacheoptimized-true))
 - **Self-healing model sync** — stale-while-revalidate from the authenticated `/v1/models`, hot-swapped at session start and after `/login`. Without a key it makes no network request and serves the cached or embedded catalog
 - **Quiet startup sync** — startup never waits on the network, and the catalog is refreshed at most hourly, by one pi process at a time, so `/new`, `pi -p` and fan-out child agents share one cache (see [Model Sync](#model-sync))
@@ -94,10 +94,10 @@ The copies find each other through a process-global registry (`Symbol.for("pi-co
 
 | Model | Context | Vision | Reasoning | Input $/M | Cache Read $/M | Cache Write $/M | Output $/M |
 |-------|---------|--------|-----------|-----------|-----------------|------------------|------------|
-| Deepseek V4.1 Flash | 1.0M | ✅ | ❌ | $0.19 | $0.01 | $0.19 | $0.60 |
-| DeepSeek V4.1 Flash | 1.0M | ✅ | ✅ | $0.01 | — | $0.09 | $1.20 |
+| DeepSeek V4.1 Flash Fast | 1.0M | ✅ | ✅ | $0.45 | $0.009 | $0.45 | $1.80 |
+| DeepSeek V4.1 Flash Standard | 1.0M | ✅ | ✅ | $0.19 | $0.008 | $0.19 | $0.60 |
 
-*Costs are per million tokens. Cache Read shows — because Coral bills cached input at **$0** on every model. Prompt tokens Coral has not cached yet are billed once at the Cache Write rate, in place of the Input rate. Prices subject to change — check [Coral's live catalog](https://www.coralbricks.ai/api/public/models).*
+*Costs are per million tokens, from Coral's [public catalog](https://www.coralbricks.ai/api/public/models). Cache Read is the price of a cached input token; Cache Write is the full price of a prompt token Coral has not cached yet (input plus the cache-write rate), billed in place of the Input rate. Your key's `/v1/models` rates can differ under organization pricing — the extension syncs those at session start, so pi's cost tracking follows your key, not this table. Prices subject to change.*
 
 ## Usage
 
