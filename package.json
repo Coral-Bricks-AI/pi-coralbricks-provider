@@ -43,6 +43,7 @@
     "guard.ts",
     "sync-policy.ts",
     "models.json",
+    "public-pricing.json",
     "deprecated-models.json",
     "custom-models.json",
     "patch.json",

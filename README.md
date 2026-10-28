@@ -315,9 +315,11 @@ This will:
 1. Fetch models from `https://inference.coralbricks.ai/v1/models` (falls back to the unauthenticated [public catalog](https://www.coralbricks.ai/api/public/models) without a key)
 2. Preserve existing model data (pricing, compat, thinking maps) for known models
 3. Apply overrides from `patch.json`
-4. Update `models.json` and the README model table
+4. Update `models.json` with your key’s rates and save public list prices separately in `public-pricing.json` for the README. If the public catalog is unavailable, keep the last public-price snapshot; without prices for every public model, leave the table unchanged.
 
-To regenerate just the README model table from local data — no API key needed:
+Legacy Fast organizations retain their grandfathered rates. Coral’s [pricing page](https://www.coralbricks.ai/pricing) states that organizations created before October 16, 2026, 20:53:32 UTC keep their previous Fast pricing; Standard uses the published rates for every account. The extension follows your key’s `/v1/models` response, not the README’s public list prices.
+
+To regenerate just the README model table from local data and the saved public-price snapshot — no API key or network access needed:
 
 ```bash
 node scripts/update-models.js --readme-only

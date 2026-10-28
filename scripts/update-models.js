@@ -151,6 +151,8 @@ const MODELS_JSON_PATH = path.join(__dirname, '..', 'models.json');
 const PATCH_JSON_PATH = path.join(__dirname, '..', 'patch.json');
 const CUSTOM_MODELS_JSON_PATH = path.join(__dirname, '..', 'custom-models.json');
 const README_PATH = path.join(__dirname, '..', 'README.md');
+const PUBLIC_PRICING_JSON_PATH = path.join(__dirname, '..', 'public-pricing.json');
+const PUBLIC_CATALOG_TIMEOUT_MS = 10000;
 
 // Output-token fallbacks for models whose API rows do not report a limit.
 const DEFAULT_MAX_TOKENS = {};   // per-id output-token fallbacks; empty while every served model reports one
@@ -225,7 +227,7 @@ async function fetchV1Models(apiKey) {
 
 async function fetchPublicCatalog() {
   console.log(`Fetching public catalog from ${PUBLIC_CATALOG_URL}...`);
-  const response = await fetch(PUBLIC_CATALOG_URL);
+  const response = await fetch(PUBLIC_CATALOG_URL, { signal: AbortSignal.timeout(PUBLIC_CATALOG_TIMEOUT_MS) });
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`);
   }
@@ -235,41 +237,56 @@ async function fetchPublicCatalog() {
   return models;
 }
 
-/**
- * Public list prices per slug, in models.json cost shape.
- *
- * /v1/models prices belong to the key that fetched them — an organization can
- * hold custom rates — so the README renders the public list instead, matching
- * the pricing page it links to. Null when the catalog is unreachable; the
- * README then keeps the rates in models.json.
- */
-async function fetchPublicListPricing() {
+/** Reject incomplete prices instead of silently turning absent fields into free tokens. */
+function isListPrice(rate) {
+  return rate && ['input', 'output', 'cacheRead', 'cacheWrite'].every(
+    (key) => typeof rate[key] === 'number' && Number.isFinite(rate[key]) && rate[key] >= 0
+  );
+}
+
+/** Local-only unless refresh is explicit; never falls back to per-key models.json prices. */
+async function loadPublicListPricing({ refresh = false, catalog, snapshotPath = PUBLIC_PRICING_JSON_PATH } = {}) {
+  const saved = loadJson(snapshotPath);
+  const entries = saved && typeof saved === 'object' && !Array.isArray(saved) ? Object.entries(saved) : [];
+  const cached = entries.length > 0 && entries.every(([, rate]) => isListPrice(rate)) ? new Map(entries) : null;
+  if (!refresh) return cached;
+
   try {
-    const prices = new Map();
-    for (const entry of await fetchPublicCatalog()) {
-      if (!entry || typeof entry.slug !== 'string') continue;
+    const rows = catalog ?? await fetchPublicCatalog();
+    if (!Array.isArray(rows) || rows.length === 0) throw new Error('empty public catalog');
+    const prices = new Map(cached);
+    for (const entry of rows) {
+      if (!entry || typeof entry.slug !== 'string' || !entry.slug ||
+          ![entry.inputPerM, entry.outputPerM, entry.cacheReadPerM, entry.cacheWritePerM].every(
+            (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
+          )) throw new Error('incomplete public catalog pricing');
       prices.set(entry.slug, {
-        input: toNumber(entry.inputPerM),
-        output: toNumber(entry.outputPerM),
-        cacheRead: toNumber(entry.cacheReadPerM),
-        cacheWrite: writtenTokenCost(toNumber(entry.inputPerM), entry.cacheWritePerM),
+        input: entry.inputPerM,
+        output: entry.outputPerM,
+        cacheRead: entry.cacheReadPerM,
+        cacheWrite: writtenTokenCost(entry.inputPerM, entry.cacheWritePerM),
       });
     }
+    saveJson(snapshotPath, Object.fromEntries([...prices].sort(([a], [b]) => a.localeCompare(b))));
     return prices;
   } catch (error) {
-    console.warn(`⚠ Public catalog unavailable (${error.message}); README keeps models.json prices`);
-    return null;
+    console.warn(`⚠ Public catalog unavailable (${error.message}); keeping the last public-price snapshot`);
+    return cached;
   }
 }
 
-/** Overlay public list prices on the README model list (slugs the list omits keep models.json rates). */
-function applyListPricing(models, prices) {
-  if (!prices) return models;
+/** Only explicitly curated custom models may use a price absent from the public snapshot. */
+function applyListPricing(models, prices, customModels = []) {
+  const customIds = new Set(Array.isArray(customModels) ? customModels.map((m) => m.id) : []);
+  if (models.some((model) => !prices?.has(model.id) && !customIds.has(model.id))) {
+    console.warn('⚠ Public prices missing; leaving the README table unchanged');
+    return false;
+  }
   for (const model of models) {
-    const rate = prices.get(model.id);
+    const rate = prices?.get(model.id);
     if (rate) model.cost = { ...rate };
   }
-  return models;
+  return true;
 }
 
 async function fetchModels(apiKey) {
@@ -639,10 +656,12 @@ async function main() {
       const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
       const readmeBase = Array.isArray(baseModels) ? baseModels : [];
       const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);
-      applyListPricing(readmeModels, await fetchPublicListPricing());
-      readmeModels.sort((a, b) => a.name.localeCompare(b.name));
-      updateReadme(readmeModels);
-      console.log('✓ Regenerated README.md from local model data');
+      const prices = await loadPublicListPricing();
+      if (applyListPricing(readmeModels, prices, customModels)) {
+        readmeModels.sort((a, b) => a.name.localeCompare(b.name));
+        updateReadme(readmeModels);
+        console.log('✓ Regenerated README.md from local model data and public-price snapshot');
+      }
       return;
     }
 
@@ -686,11 +705,12 @@ async function main() {
     const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
     const readmeBase = models;
     const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);
-    applyListPricing(readmeModels, await fetchPublicListPricing());
-    readmeModels.sort((a, b) => a.name.localeCompare(b.name));
-
-    // Update README
-    updateReadme(readmeModels);
+    // Reuse the public catalog when it already supplied the model list.
+    const prices = await loadPublicListPricing({ refresh: true, catalog: authoritative ? undefined : apiModels });
+    if (applyListPricing(readmeModels, prices, customModels)) {
+      readmeModels.sort((a, b) => a.name.localeCompare(b.name));
+      updateReadme(readmeModels);
+    }
 
     // Summary
     const newIds = new Set(models.map((m) => m.id));
@@ -716,4 +736,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   main();
 }
 
-export { isRetiredUpstream, keepUnlistedModels, updateDeprecatedModels };
+export { isRetiredUpstream, keepUnlistedModels, updateDeprecatedModels, loadPublicListPricing, applyListPricing };
