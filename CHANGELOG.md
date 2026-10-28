@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.42
+
+- Curate both DeepSeek V4.1 Flash tiers: Fast (`deepseek-v4.1-flash-fast`) and Standard (`deepseek-v4.1-flash`) now have distinct display names, image input, and the same supported reasoning-effort controls.
+- Separate the README's public list prices from the syncing key's rates. Existing legacy Fast organizations keep their grandfathered prices; runtime cost tracking continues to use the key's `/v1/models` response.
+- Keep a packaged `public-pricing.json` snapshot for offline README generation and public-catalog outages. `--readme-only` makes no network requests, malformed or missing public prices never fall back to organization-specific rates, and public requests have a timeout.
+- Carry public cached-read rates into keyless catalog syncs and display sub-cent prices accurately. Validate price shape and curation in tests without pinning live per-key rates.
+
 ## 1.0.38
 
 - Drop GLM 5.3 (`glm-5.3-fast`). Coral retired it on 2026-10-19 (404 `model_retired`), so the catalog sync removed it without a grace period, and its `patch.json` entry goes with it. DeepSeek V4.1 Flash (`deepseek-v4.1-flash-fast`) is the only model Coral serves. The zai thinking format stays supported for GLM models.

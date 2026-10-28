@@ -267,22 +267,22 @@ describe("embedded model catalog invariants", () => {
     }
   });
 
-  it("offers the canonical -fast slugs", () => {
+  it("offers the canonical DeepSeek slugs", () => {
     // models.json mirrors the per-key /v1/models set. Coral stopped serving the
     // hidden -fp4 twins on 2026-10-12 and retired glm-5.3-fast on 2026-10-19,
-    // so only the DeepSeek -fast slug remains…
-    expect(models.map((m) => m.id).sort()).toEqual(["deepseek-v4.1-flash-fast"]);
+    // and on 2026-10-22 began serving the Standard tier next to -fast…
+    expect(models.map((m) => m.id).sort()).toEqual(["deepseek-v4.1-flash", "deepseek-v4.1-flash-fast"]);
     // …and the provider catalog (what pi's /model lists) is exactly that.
     const effective = buildModels(models as any, customModelsData as any, patchData as any);
-    expect(effective.map((m) => m.id)).toEqual(["deepseek-v4.1-flash-fast"]);
+    expect(effective.map((m) => m.id).sort()).toEqual(["deepseek-v4.1-flash", "deepseek-v4.1-flash-fast"]);
     expect(effective.every((m) => (m as { hidden?: boolean }).hidden === undefined)).toBe(true);
   });
 
-  it("gives every -fast slug the reasoning settings its legacy -fp4 id carried", () => {
+  it("gives every DeepSeek slug the reasoning settings its legacy -fp4 id carried", () => {
     // The -fp4 ids were the curated originals (models.json + patch.json at
     // 4ce2b3d). When Coral served the -fast slugs instead, the new API rows
     // arrived with no reasoning at all, so the curation had to be re-keyed —
-    // this pins the settings each -fast slug must keep.
+    // this pins the settings each DeepSeek slug must keep.
     const legacy = {
       "deepseek-v4.1-flash-fast": {
         reasoning: true,
@@ -290,7 +290,13 @@ describe("embedded model catalog invariants", () => {
         maxTokens: 32768,
         thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
         compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
-        cacheWrite: 0.09,
+      },
+      "deepseek-v4.1-flash": {
+        reasoning: true,
+        input: ["text", "image"],
+        maxTokens: 32768,
+        thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
+        compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
       },
     } as const;
     const effective = buildModels(models as any, [], patchData as any);
@@ -301,7 +307,7 @@ describe("embedded model catalog invariants", () => {
       expect(model!.input).toEqual(expected.input);
       expect(model!.maxTokens).toBe(expected.maxTokens);
       expect(model!.thinkingLevelMap).toEqual(expected.thinkingLevelMap);
-      expect(model!.cost.cacheWrite).toBe(expected.cacheWrite);
+      expect(model!.cost.cacheWrite).toBeGreaterThanOrEqual(model!.cost.input);
       expect(model!.compat).toMatchObject({
         ...expected.compat,
         supportsStore: false,
@@ -311,12 +317,18 @@ describe("embedded model catalog invariants", () => {
     }
   });
 
-  it("has well-formed costs with free cached reads and a cache-write rate", () => {
+  it("has well-formed costs with a cache-read price and a cache-write rate", () => {
+    // models.json carries whatever Coral's /v1/models reports for the syncing
+    // key, so assert the shape of a rate rather than its cents: a repricing must
+    // not fail the release. Written tokens bill at least the input rate.
     for (const m of models) {
       for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
         expect(typeof m.cost[key]).toBe("number");
+        expect(m.cost[key]).toBeGreaterThanOrEqual(0);
       }
-      expect(m.cost.cacheRead).toBe(0); // Coral: cached input is free
+      expect(m.cost.input).toBeGreaterThan(0);
+      expect(m.cost.output).toBeGreaterThan(0);
+      expect(m.cost.cacheWrite).toBeGreaterThanOrEqual(m.cost.input);
       expect(m.contextWindow).toBeGreaterThanOrEqual(131072);
       expect(m.maxTokens).toBeGreaterThan(0);
     }
@@ -328,16 +340,14 @@ describe("embedded model catalog invariants", () => {
     }
   });
 
-  it("keeps pricing aligned with Coral's published rates", () => {
-    // Effective = after patch.json, which no longer touches prices.
+  it("keeps a delisted model's last-known pricing through its grace window", () => {
+    // Live rates belong to Coral's API and the README (public list); only the
+    // frozen row of a delisted model is ours to pin.
     const byId = Object.fromEntries(
       buildModels(catalog as any, [], patchData as any).map((m) => [m.id, m]),
     );
-    // glm-5.2-fp4 is delisted; it is present only during its grace window.
     const glm52 = byId["glm-5.2-fp4"];
     if (glm52) expect(glm52.cost).toMatchObject({ input: 1.12, output: 4.4 });
-    // 2026-10-08: DeepSeek $0.01 input + $0.08 cache write on top = $0.09 per written token.
-    expect(byId["deepseek-v4.1-flash-fast"].cost).toMatchObject({ input: 0.01, output: 1.2, cacheWrite: 0.09 });
   });
 
   it("gives every effective model reasoning config after patch.json", () => {

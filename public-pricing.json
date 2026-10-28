@@ -1,0 +1,14 @@
+{
+  "deepseek-v4.1-flash": {
+    "input": 0.19,
+    "output": 0.6,
+    "cacheRead": 0.008,
+    "cacheWrite": 0.19
+  },
+  "deepseek-v4.1-flash-fast": {
+    "input": 0.45,
+    "output": 1.8,
+    "cacheRead": 0.009,
+    "cacheWrite": 0.45
+  }
+}

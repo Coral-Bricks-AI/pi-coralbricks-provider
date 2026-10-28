@@ -9,10 +9,15 @@
  * Sources, in order:
  * 1. Authenticated https://inference.coralbricks.ai/v1/models — the authoritative
  *    per-key enabled set, with per-million USD pricing (input_per_m / output_per_m /
- *    cached_input_per_m — cached reads are $0), context_length, supports_image_input.
+ *    cached_input_per_m), context_length, supports_image_input. These are the key's
+ *    own rates: an organization can hold custom pricing.
  * 2. Unauthenticated public catalog https://www.coralbricks.ai/api/public/models —
  *    same control-plane data without a key (contextWindow like "1M", inputPerM,
- *    outputPerM). Used when no key is configured or /v1/models fails.
+ *    outputPerM, cacheReadPerM). Used when no key is configured or /v1/models fails.
+ *
+ * models.json carries the rates used for cost tracking. The README table is
+ * rendered from the PUBLIC list prices instead, so it matches the page it links
+ * to; your key's /v1/models rates replace them at runtime.
  *
  * The catalog is a subset: it lists each model's canonical slug, not every
  * variant enabled for a key, so a catalog run only ever adds or keeps models —
@@ -146,6 +151,8 @@ const MODELS_JSON_PATH = path.join(__dirname, '..', 'models.json');
 const PATCH_JSON_PATH = path.join(__dirname, '..', 'patch.json');
 const CUSTOM_MODELS_JSON_PATH = path.join(__dirname, '..', 'custom-models.json');
 const README_PATH = path.join(__dirname, '..', 'README.md');
+const PUBLIC_PRICING_JSON_PATH = path.join(__dirname, '..', 'public-pricing.json');
+const PUBLIC_CATALOG_TIMEOUT_MS = 10000;
 
 // Output-token fallbacks for models whose API rows do not report a limit.
 const DEFAULT_MAX_TOKENS = {};   // per-id output-token fallbacks; empty while every served model reports one
@@ -220,7 +227,7 @@ async function fetchV1Models(apiKey) {
 
 async function fetchPublicCatalog() {
   console.log(`Fetching public catalog from ${PUBLIC_CATALOG_URL}...`);
-  const response = await fetch(PUBLIC_CATALOG_URL);
+  const response = await fetch(PUBLIC_CATALOG_URL, { signal: AbortSignal.timeout(PUBLIC_CATALOG_TIMEOUT_MS) });
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`);
   }
@@ -228,6 +235,58 @@ async function fetchPublicCatalog() {
   const models = data.models || [];
   console.log(`✓ Fetched ${models.length} models from public catalog`);
   return models;
+}
+
+/** Reject incomplete prices instead of silently turning absent fields into free tokens. */
+function isListPrice(rate) {
+  return rate && ['input', 'output', 'cacheRead', 'cacheWrite'].every(
+    (key) => typeof rate[key] === 'number' && Number.isFinite(rate[key]) && rate[key] >= 0
+  );
+}
+
+/** Local-only unless refresh is explicit; never falls back to per-key models.json prices. */
+async function loadPublicListPricing({ refresh = false, catalog, snapshotPath = PUBLIC_PRICING_JSON_PATH } = {}) {
+  const saved = loadJson(snapshotPath);
+  const entries = saved && typeof saved === 'object' && !Array.isArray(saved) ? Object.entries(saved) : [];
+  const cached = entries.length > 0 && entries.every(([, rate]) => isListPrice(rate)) ? new Map(entries) : null;
+  if (!refresh) return cached;
+
+  try {
+    const rows = catalog ?? await fetchPublicCatalog();
+    if (!Array.isArray(rows) || rows.length === 0) throw new Error('empty public catalog');
+    const prices = new Map(cached);
+    for (const entry of rows) {
+      if (!entry || typeof entry.slug !== 'string' || !entry.slug ||
+          ![entry.inputPerM, entry.outputPerM, entry.cacheReadPerM, entry.cacheWritePerM].every(
+            (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
+          )) throw new Error('incomplete public catalog pricing');
+      prices.set(entry.slug, {
+        input: entry.inputPerM,
+        output: entry.outputPerM,
+        cacheRead: entry.cacheReadPerM,
+        cacheWrite: writtenTokenCost(entry.inputPerM, entry.cacheWritePerM),
+      });
+    }
+    saveJson(snapshotPath, Object.fromEntries([...prices].sort(([a], [b]) => a.localeCompare(b))));
+    return prices;
+  } catch (error) {
+    console.warn(`⚠ Public catalog unavailable (${error.message}); keeping the last public-price snapshot`);
+    return cached;
+  }
+}
+
+/** Only explicitly curated custom models may use a price absent from the public snapshot. */
+function applyListPricing(models, prices, customModels = []) {
+  const customIds = new Set(Array.isArray(customModels) ? customModels.map((m) => m.id) : []);
+  if (models.some((model) => !prices?.has(model.id) && !customIds.has(model.id))) {
+    console.warn('⚠ Public prices missing; leaving the README table unchanged');
+    return false;
+  }
+  for (const model of models) {
+    const rate = prices?.get(model.id);
+    if (rate) model.cost = { ...rate };
+  }
+  return true;
 }
 
 async function fetchModels(apiKey) {
@@ -320,6 +379,7 @@ function transformCatalogModel(entry, existingModelsMap) {
     if (contextWindow) existing.contextWindow = contextWindow;
     if (typeof entry.inputPerM === 'number') existing.cost.input = entry.inputPerM;
     if (typeof entry.outputPerM === 'number') existing.cost.output = entry.outputPerM;
+    if (typeof entry.cacheReadPerM === 'number') existing.cost.cacheRead = entry.cacheReadPerM;
     if (typeof entry.cacheWritePerM === 'number') {
       existing.cost.cacheWrite = writtenTokenCost(existing.cost.input, entry.cacheWritePerM);
     }
@@ -334,7 +394,7 @@ function transformCatalogModel(entry, existingModelsMap) {
     cost: {
       input: toNumber(entry.inputPerM),
       output: toNumber(entry.outputPerM),
-      cacheRead: 0,
+      cacheRead: toNumber(entry.cacheReadPerM),
       cacheWrite: writtenTokenCost(toNumber(entry.inputPerM), entry.cacheWritePerM),
     },
     contextWindow,
@@ -430,7 +490,8 @@ function formatContext(n) {
 
 function formatCost(cost) {
   if (cost === 0 || cost === null || cost === undefined) return '—';
-  return `$${cost.toFixed(2)}`;
+  // Two decimals everywhere Coral prices in cents; three for sub-cent cache reads ($0.008/M).
+  return `$${cost >= 0.01 ? cost.toFixed(2) : cost.toFixed(3)}`;
 }
 
 function generateReadmeTable(models) {
@@ -595,9 +656,12 @@ async function main() {
       const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
       const readmeBase = Array.isArray(baseModels) ? baseModels : [];
       const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);
-      readmeModels.sort((a, b) => a.name.localeCompare(b.name));
-      updateReadme(readmeModels);
-      console.log('✓ Regenerated README.md from local model data');
+      const prices = await loadPublicListPricing();
+      if (applyListPricing(readmeModels, prices, customModels)) {
+        readmeModels.sort((a, b) => a.name.localeCompare(b.name));
+        updateReadme(readmeModels);
+        console.log('✓ Regenerated README.md from local model data and public-price snapshot');
+      }
       return;
     }
 
@@ -637,13 +701,16 @@ async function main() {
 
     // Build the README model list: base → patch → custom. Grace-period models stay
     // servable at runtime (index.ts appends them) but are not listed as available.
+    // Prices come from the public list, not the key's /v1/models rates.
     const customModels = loadJson(CUSTOM_MODELS_JSON_PATH);
     const readmeBase = models;
     const readmeModels = buildModels(readmeBase, Array.isArray(customModels) ? customModels : [], patchData);
-    readmeModels.sort((a, b) => a.name.localeCompare(b.name));
-
-    // Update README
-    updateReadme(readmeModels);
+    // Reuse the public catalog when it already supplied the model list.
+    const prices = await loadPublicListPricing({ refresh: true, catalog: authoritative ? undefined : apiModels });
+    if (applyListPricing(readmeModels, prices, customModels)) {
+      readmeModels.sort((a, b) => a.name.localeCompare(b.name));
+      updateReadme(readmeModels);
+    }
 
     // Summary
     const newIds = new Set(models.map((m) => m.id));
@@ -669,4 +736,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   main();
 }
 
-export { isRetiredUpstream, keepUnlistedModels, updateDeprecatedModels };
+export { isRetiredUpstream, keepUnlistedModels, updateDeprecatedModels, loadPublicListPricing, applyListPricing };
