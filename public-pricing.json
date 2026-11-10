@@ -10,5 +10,11 @@
     "output": 1.8,
     "cacheRead": 0.009,
     "cacheWrite": 0.45
+  },
+  "deepseek-v4.1-flash-value": {
+    "input": 0.005,
+    "output": 0.57,
+    "cacheRead": 0.003,
+    "cacheWrite": 0.005
   }
 }
